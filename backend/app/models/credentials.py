@@ -53,7 +53,7 @@ class Credential(Base):
             name="ck_credentials_status",
         ),
         CheckConstraint(
-            "revoke_reason IS NULL OR revoke_reason IN ('admin', 'superseded')",
+            "(status = 'revoked' AND revoke_reason IN ('admin', 'superseded')) OR (status != 'revoked' AND revoke_reason IS NULL)",
             name="ck_credentials_revoke_reason",
         ),
         CheckConstraint("valid_until > valid_from", name="ck_credentials_valid_window"),
@@ -82,7 +82,6 @@ class Credential(Base):
         BigInteger,
         ForeignKey("resources.id", ondelete="RESTRICT"),
         nullable=False,
-        index=True,
     )
     pin_hmac: Mapped[str] = mapped_column(
         String(64),

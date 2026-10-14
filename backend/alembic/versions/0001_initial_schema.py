@@ -116,6 +116,17 @@ def upgrade() -> None:
             RETURN new_seq;
         END;
         $$ LANGUAGE plpgsql;
+
+        CREATE OR REPLACE FUNCTION trg_sync_state_protect_delete() RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'Deleting sync_state singleton row is prohibited (id=%)', OLD.id;
+        END;
+        $$ LANGUAGE plpgsql;
+
+        CREATE TRIGGER check_sync_state_protect_delete
+        BEFORE DELETE ON sync_state
+        FOR EACH ROW
+        EXECUTE FUNCTION trg_sync_state_protect_delete();
     """)
 
     # -------------------------------------------------------------------------
@@ -168,10 +179,12 @@ def upgrade() -> None:
         sa.UniqueConstraint("change_seq", name="uq_credentials_change_seq"),
         sa.UniqueConstraint("resource_id", "pin_hmac", name="uq_credentials_resource_pin_hmac"),
         sa.CheckConstraint("status IN ('active', 'consumed', 'expired', 'revoked')", name="ck_credentials_status"),
-        sa.CheckConstraint("revoke_reason IS NULL OR revoke_reason IN ('admin', 'superseded')", name="ck_credentials_revoke_reason"),
+        sa.CheckConstraint(
+            "(status = 'revoked' AND revoke_reason IN ('admin', 'superseded')) OR (status != 'revoked' AND revoke_reason IS NULL)",
+            name="ck_credentials_revoke_reason",
+        ),
         sa.CheckConstraint("valid_until > valid_from", name="ck_credentials_valid_window"),
     )
-    op.create_index("ix_credentials_resource_id", "credentials", ["resource_id"])
     op.create_index("ix_credentials_status", "credentials", ["status"])
 
     # Rule R1: Partial unique index allowing at most one active credential per resource
@@ -181,14 +194,28 @@ def upgrade() -> None:
         WHERE status = 'active';
     """)
 
-    # Database trigger enforcing terminal immutability (consumed/expired/revoked cannot become active again)
+    # Database trigger enforcing terminal immutability and protecting terminal credentials
     op.execute("""
         CREATE OR REPLACE FUNCTION trg_credentials_terminal_immutability()
         RETURNS TRIGGER AS $$
         BEGIN
-            IF OLD.status IN ('consumed', 'expired', 'revoked') AND NEW.status != OLD.status THEN
-                RAISE EXCEPTION 'Terminal credential status cannot be changed: id=%, current=%, attempted=%',
-                    OLD.id, OLD.status, NEW.status;
+            IF TG_OP = 'DELETE' THEN
+                IF OLD.status IN ('consumed', 'expired', 'revoked') THEN
+                    RAISE EXCEPTION 'Terminal credential cannot be deleted: id=%, status=%',
+                        OLD.id, OLD.status;
+                END IF;
+                RETURN OLD;
+            END IF;
+
+            IF OLD.status IN ('consumed', 'expired', 'revoked') THEN
+                IF NEW.status != OLD.status THEN
+                    RAISE EXCEPTION 'Terminal credential status cannot be changed: id=%, current=%, attempted=%',
+                        OLD.id, OLD.status, NEW.status;
+                END IF;
+                IF NEW.pin_hmac != OLD.pin_hmac OR NEW.pin_encrypted != OLD.pin_encrypted OR NEW.resource_id != OLD.resource_id OR NEW.request_id != OLD.request_id THEN
+                    RAISE EXCEPTION 'Terminal credential core identity fields cannot be modified: id=%, status=%',
+                        OLD.id, OLD.status;
+                END IF;
             END IF;
 
             IF OLD.status != 'active' AND (NEW.valid_from != OLD.valid_from OR NEW.valid_until != OLD.valid_until) THEN
@@ -201,7 +228,7 @@ def upgrade() -> None:
         $$ LANGUAGE plpgsql;
 
         CREATE TRIGGER check_credential_terminal_immutability
-        BEFORE UPDATE ON credentials
+        BEFORE UPDATE OR DELETE ON credentials
         FOR EACH ROW
         EXECUTE FUNCTION trg_credentials_terminal_immutability();
     """)
@@ -268,6 +295,8 @@ def downgrade() -> None:
 
     op.drop_table("access_requests")
 
+    op.execute("DROP TRIGGER IF EXISTS check_sync_state_protect_delete ON sync_state;")
+    op.execute("DROP FUNCTION IF EXISTS trg_sync_state_protect_delete();")
     op.execute("DROP FUNCTION IF EXISTS next_change_seq();")
     op.drop_table("sync_state")
 
