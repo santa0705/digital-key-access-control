@@ -53,7 +53,7 @@ class Credential(Base):
             name="ck_credentials_status",
         ),
         CheckConstraint(
-            "(status = 'revoked' AND revoke_reason IN ('admin', 'superseded')) OR (status != 'revoked' AND revoke_reason IS NULL)",
+            "(status = 'revoked' AND revoke_reason IS NOT NULL AND revoke_reason IN ('admin', 'superseded')) OR (status != 'revoked' AND revoke_reason IS NULL)",
             name="ck_credentials_revoke_reason",
         ),
         CheckConstraint("valid_until > valid_from", name="ck_credentials_valid_window"),

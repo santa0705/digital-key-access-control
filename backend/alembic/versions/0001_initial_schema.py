@@ -180,7 +180,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("resource_id", "pin_hmac", name="uq_credentials_resource_pin_hmac"),
         sa.CheckConstraint("status IN ('active', 'consumed', 'expired', 'revoked')", name="ck_credentials_status"),
         sa.CheckConstraint(
-            "(status = 'revoked' AND revoke_reason IN ('admin', 'superseded')) OR (status != 'revoked' AND revoke_reason IS NULL)",
+            "(status = 'revoked' AND revoke_reason IS NOT NULL AND revoke_reason IN ('admin', 'superseded')) OR (status != 'revoked' AND revoke_reason IS NULL)",
             name="ck_credentials_revoke_reason",
         ),
         sa.CheckConstraint("valid_until > valid_from", name="ck_credentials_valid_window"),
@@ -207,19 +207,9 @@ def upgrade() -> None:
                 RETURN OLD;
             END IF;
 
+            -- If the row was already terminal prior to this update, reject ANY modification
             IF OLD.status IN ('consumed', 'expired', 'revoked') THEN
-                IF NEW.status != OLD.status THEN
-                    RAISE EXCEPTION 'Terminal credential status cannot be changed: id=%, current=%, attempted=%',
-                        OLD.id, OLD.status, NEW.status;
-                END IF;
-                IF NEW.pin_hmac != OLD.pin_hmac OR NEW.pin_encrypted != OLD.pin_encrypted OR NEW.resource_id != OLD.resource_id OR NEW.request_id != OLD.request_id THEN
-                    RAISE EXCEPTION 'Terminal credential core identity fields cannot be modified: id=%, status=%',
-                        OLD.id, OLD.status;
-                END IF;
-            END IF;
-
-            IF OLD.status != 'active' AND (NEW.valid_from != OLD.valid_from OR NEW.valid_until != OLD.valid_until) THEN
-                RAISE EXCEPTION 'Validity window cannot be modified for non-active credential: id=%, status=%',
+                RAISE EXCEPTION 'Terminal credential cannot be modified: id=%, status=%',
                     OLD.id, OLD.status;
             END IF;
 

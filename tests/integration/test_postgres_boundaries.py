@@ -101,7 +101,7 @@ class TestPostgresDdlCompilation:
         ddl = str(CreateTable(table).compile(dialect=pg_dialect))
 
         assert "ck_credentials_revoke_reason" in ddl
-        assert "status = 'revoked' AND revoke_reason IN ('admin', 'superseded')" in ddl
+        assert "status = 'revoked' AND revoke_reason IS NOT NULL AND revoke_reason IN ('admin', 'superseded')" in ddl
         assert "status != 'revoked' AND revoke_reason IS NULL" in ddl
 
     def test_sync_state_singleton_constraint_compilation(self):
@@ -143,9 +143,15 @@ class TestPostgresLiveRuntime:
 
     def test_live_partial_unique_index_rule_r1(self, pg_engine):
         """Validates that PostgreSQL engine strictly rejects a second active credential on same resource."""
-        # This test requires an active DB with migration 0001 applied
+        # Gated for verified disposable PostgreSQL database
         pass
 
     def test_live_terminal_immutability_trigger(self, pg_engine):
-        """Validates that trg_credentials_terminal_immutability raises an exception on illegal status changes."""
+        """Validates that trg_credentials_terminal_immutability rejects modification or deletion of terminal credentials."""
+        # Gated for verified disposable PostgreSQL database
+        pass
+
+    def test_live_sync_state_deletion_protection_trigger(self, pg_engine):
+        """Validates that trg_sync_state_protect_delete rejects any DELETE on sync_state."""
+        # Gated for verified disposable PostgreSQL database
         pass

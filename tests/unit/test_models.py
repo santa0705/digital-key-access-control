@@ -154,6 +154,7 @@ def test_credentials_table_rule_r1_and_pin_protection():
     revoke_ck = next(ck for ck in table.constraints if getattr(ck, "name", "") == "ck_credentials_revoke_reason")
     ck_sql = str(revoke_ck.sqltext)
     assert "status = 'revoked'" in ck_sql
+    assert "revoke_reason IS NOT NULL" in ck_sql
     assert "revoke_reason IN ('admin', 'superseded')" in ck_sql
     assert "status != 'revoked' AND revoke_reason IS NULL" in ck_sql
 
@@ -262,3 +263,71 @@ def test_model_enums_and_constants():
     assert EventReason.CONSUMED == "consumed"
     assert EventReason.REVOKED == "revoked"
     assert EventReason.TIME_UNTRUSTED == "time_untrusted"
+
+
+def test_credentials_revoke_reason_constraint_enforcement():
+    """
+    Functional check constraint test against an in-memory SQLite engine.
+    Proves that:
+    - 'revoked' with NULL revoke_reason is strictly rejected.
+    - 'revoked' with invalid revoke_reason is strictly rejected.
+    - 'revoked' with 'admin' or 'superseded' is accepted.
+    - 'active', 'consumed', 'expired' with NULL revoke_reason is accepted.
+    - 'active', 'consumed', 'expired' with any non-NULL revoke_reason is strictly rejected.
+    """
+    import sqlite3
+
+    con = sqlite3.connect(":memory:")
+    cur = con.cursor()
+    cur.execute(
+        """
+        CREATE TABLE credentials_test (
+            id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL,
+            revoke_reason TEXT,
+            CHECK (
+                (status = 'revoked' AND revoke_reason IS NOT NULL AND revoke_reason IN ('admin', 'superseded'))
+                OR
+                (status != 'revoked' AND revoke_reason IS NULL)
+            )
+        )
+        """
+    )
+
+    # 1. Valid active with NULL reason
+    cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (1, 'active', NULL)")
+
+    # 2. Valid consumed with NULL reason
+    cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (2, 'consumed', NULL)")
+
+    # 3. Valid expired with NULL reason
+    cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (3, 'expired', NULL)")
+
+    # 4. Valid revoked with 'admin'
+    cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (4, 'revoked', 'admin')")
+
+    # 5. Valid revoked with 'superseded'
+    cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (5, 'revoked', 'superseded')")
+
+    # 6. Invalid: revoked with NULL reason
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (6, 'revoked', NULL)")
+
+    # 7. Invalid: revoked with illegal reason
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (7, 'revoked', 'lost_key')")
+
+    # 8. Invalid: active with reason
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (8, 'active', 'admin')")
+
+    # 9. Invalid: consumed with reason
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (9, 'consumed', 'superseded')")
+
+    # 10. Invalid: expired with reason
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute("INSERT INTO credentials_test (id, status, revoke_reason) VALUES (10, 'expired', 'admin')")
+
+    con.close()
+
