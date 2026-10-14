@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlalchemy>=2.0
+alembic
+psycopg[binary]
+pydantic-settings
+pyjwt
+bcrypt
+cryptography
+pytest
+httpx
