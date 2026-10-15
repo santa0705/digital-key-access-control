@@ -98,12 +98,12 @@ def list_my_access_requests(
 # ---------------------------------------------------------------------------
 
 @router.get(
-    "/access-requests/{request_id}/pin",
+    "/access-requests/{id}/pin",
     response_model=PinRevealOut,
     summary="Reveal PIN for access request",
 )
 def reveal_pin(
-    request_id: int,
+    id: int,
     response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -128,7 +128,7 @@ def reveal_pin(
     req, plain_pin = access_requests_service.reveal_pin_for_owner(
         db=db,
         user=current_user,
-        request_id=request_id,
+        request_id=id,
     )
 
     cred = req.credential

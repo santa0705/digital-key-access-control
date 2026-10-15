@@ -1,29 +1,51 @@
 """
-routers/admin.py -- Administrative read-only endpoints (Person A).
+routers/admin.py -- Administrative endpoints for Person A and Person B.
 
 Implements:
   - GET /admin/logs  (Contract 5.3)
   - GET /admin/nodes (Contract 5.3)
+  - GET /admin/access-requests (Contract 5.3)
+  - POST /admin/access-requests/{id}/approve (Contract 5.3)
+  - POST /admin/access-requests/{id}/reject (Contract 5.3)
+  - POST /admin/credentials/{id}/revoke (Contract 5.3)
 
 Security:
-  - Requires Bearer token with 'admin' role. Non-admin users receive 403 forbidden.
+  - All routes require Bearer token with 'admin' role. Non-admin users receive 403 forbidden.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
 from app.db import get_db
-from app.deps import require_admin
-from app.models.access_events import AccessEvent
+from app.deps import AuthenticatedUser, require_admin
+from app.errors import (
+    err_active_credential_exists,
+    err_invalid_state,
+    err_not_found,
+    err_window_expired,
+)
+from app.models.access_events import AccessEvent, EventReason, EventSource, EventType
+from app.models.access_requests import AccessRequest, RequestStatus
+from app.models.credentials import Credential, CredentialStatus, RevokeReason
 from app.models.nodes import Node
 from app.models.sync_state import SyncState
-from app.models.users import User
-from app.schemas.admin import AdminLogEntryOut, AdminNodeOut
+from app.schemas.access_requests import AccessRequestOut
+from app.schemas.admin import (
+    AdminApprovePayload,
+    AdminLogEntryOut,
+    AdminNodeOut,
+    AdminRejectPayload,
+    AdminRevokePayload,
+    CredentialRevokeOut,
+)
+from app.services.credentials import compute_pin_hmac, encrypt_pin, generate_pin
+from app.services.events import record_server_event
+from app.services.sequence import allocate_next_change_seq
 
 router = APIRouter(prefix="/admin", tags=["Admin Operations"])
 _settings = get_settings()
@@ -39,6 +61,303 @@ def _format_utc_z(dt: Optional[datetime]) -> Optional[str]:
         dt = dt.astimezone(timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+
+# ---------------------------------------------------------------------------
+# Admin Access Requests & Credential Lifecycle (Person B)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/access-requests",
+    response_model=list[AccessRequestOut],
+    summary="List access requests filtered by status",
+    description="List access requests filtered by status (defaults to 'pending').",
+)
+def list_admin_access_requests(
+    status_filter: Literal["pending", "approved", "rejected", "revoked", "all"] = Query(
+        default="pending",
+        alias="status",
+        description="Filter by request status: 'pending', 'approved', 'rejected', 'revoked', or 'all'",
+    ),
+    db: Session = Depends(get_db),
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> list[AccessRequestOut]:
+    """
+    GET /admin/access-requests?status={pending|approved|rejected|revoked|all}
+    """
+    query = (
+        db.query(AccessRequest)
+        .options(
+            joinedload(AccessRequest.resource),
+            joinedload(AccessRequest.user),
+            joinedload(AccessRequest.credential),
+        )
+    )
+
+    if status_filter != "all":
+        query = query.filter(AccessRequest.status == status_filter)
+
+    requests = (
+        query.order_by(AccessRequest.created_at.desc(), AccessRequest.id.desc())
+        .all()
+    )
+    return [AccessRequestOut.from_orm_obj(r) for r in requests]
+
+
+@router.post(
+    "/access-requests/{id}/approve",
+    response_model=AccessRequestOut,
+    summary="Atomically approve request and generate active credential",
+    description="Atomically approve access request and issue active credential. Enforces Rule R1.",
+)
+def approve_access_request(
+    id: int,
+    payload: AdminApprovePayload,
+    db: Session = Depends(get_db),
+    admin: AuthenticatedUser = Depends(require_admin),
+) -> AccessRequestOut:
+    """
+    POST /admin/access-requests/{id}/approve
+    """
+    target = (
+        db.query(AccessRequest)
+        .options(
+            joinedload(AccessRequest.resource),
+            joinedload(AccessRequest.user),
+            joinedload(AccessRequest.credential),
+        )
+        .filter(AccessRequest.id == id)
+        .first()
+    )
+    if target is None:
+        raise err_not_found(f"Access request #{id} not found.")
+
+    if target.status != RequestStatus.PENDING.value:
+        raise err_invalid_state(
+            f"Request #{id} is already {target.status}; only pending requests can be approved."
+        )
+
+    now = datetime.now(timezone.utc)
+    target_end = target.end_at if target.end_at.tzinfo else target.end_at.replace(tzinfo=timezone.utc)
+    if target_end <= now:
+        raise err_window_expired("Access request validity window has already passed.")
+
+    # Rule R1 Check: At most one active credential per resource
+    existing_active = (
+        db.query(Credential)
+        .filter(
+            Credential.resource_id == target.resource_id,
+            Credential.status == CredentialStatus.ACTIVE.value,
+        )
+        .first()
+    )
+
+    if existing_active is not None and not payload.replace_existing:
+        resource_code = target.resource.code if target.resource else "A"
+        raise err_active_credential_exists(
+            f"Resource {resource_code} has active credential {existing_active.id} "
+            f"(request {existing_active.request_id}). Revoke it or approve with replace_existing."
+        )
+
+    try:
+        # Replacement scenario: revoke existing active credential atomically
+        if existing_active is not None and payload.replace_existing:
+            existing_active.status = CredentialStatus.REVOKED.value
+            existing_active.revoke_reason = RevokeReason.SUPERSEDED.value
+            existing_active.revoked_at = now
+            existing_active.revoked_by = admin.id
+            existing_active.change_seq = allocate_next_change_seq(db)
+
+            # Update parent request of the superseded credential
+            parent_req = db.get(AccessRequest, existing_active.request_id)
+            if parent_req and parent_req.status != RequestStatus.REVOKED.value:
+                parent_req.status = RequestStatus.REVOKED.value
+
+            record_server_event(
+                db=db,
+                event_type=EventType.CREDENTIAL_REVOKED.value,
+                reason=EventReason.REVOKED.value,
+                resource_id=target.resource_id,
+                request_id=existing_active.request_id,
+                credential_id=existing_active.id,
+                actor_user_id=admin.id,
+                note="Superseded by replacement credential",
+            )
+
+        # Issue new active credential
+        pin = generate_pin()
+        res_code = target.resource.code if target.resource else "A"
+        pin_hmac = compute_pin_hmac(res_code, pin, _settings.PIN_HMAC_KEY)
+        pin_enc = encrypt_pin(pin, _settings.PIN_ENC_KEY)
+        new_seq = allocate_next_change_seq(db)
+
+        new_cred = Credential(
+            request_id=target.id,
+            resource_id=target.resource_id,
+            pin_hmac=pin_hmac,
+            pin_encrypted=pin_enc,
+            valid_from=target.start_at,
+            valid_until=target.end_at,
+            status=CredentialStatus.ACTIVE.value,
+            change_seq=new_seq,
+        )
+        db.add(new_cred)
+        db.flush()
+
+        # Update target request
+        target.status = RequestStatus.APPROVED.value
+        target.decided_by = admin.id
+        target.decided_at = now
+        target.decision_note = payload.note.strip() if payload.note and payload.note.strip() else "Approved by administrator"
+
+        record_server_event(
+            db=db,
+            event_type=EventType.REQUEST_APPROVED.value,
+            resource_id=target.resource_id,
+            request_id=target.id,
+            actor_user_id=admin.id,
+            note=target.decision_note,
+        )
+        record_server_event(
+            db=db,
+            event_type=EventType.CREDENTIAL_ISSUED.value,
+            resource_id=target.resource_id,
+            request_id=target.id,
+            credential_id=new_cred.id,
+            actor_user_id=admin.id,
+        )
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(target)
+    return AccessRequestOut.from_orm_obj(target)
+
+
+@router.post(
+    "/access-requests/{id}/reject",
+    response_model=AccessRequestOut,
+    summary="Reject pending access request",
+    description="Reject a pending access request.",
+)
+def reject_access_request(
+    id: int,
+    payload: AdminRejectPayload,
+    db: Session = Depends(get_db),
+    admin: AuthenticatedUser = Depends(require_admin),
+) -> AccessRequestOut:
+    """
+    POST /admin/access-requests/{id}/reject
+    """
+    target = (
+        db.query(AccessRequest)
+        .options(
+            joinedload(AccessRequest.resource),
+            joinedload(AccessRequest.user),
+            joinedload(AccessRequest.credential),
+        )
+        .filter(AccessRequest.id == id)
+        .first()
+    )
+    if target is None:
+        raise err_not_found(f"Access request #{id} not found.")
+
+    if target.status != RequestStatus.PENDING.value:
+        raise err_invalid_state(
+            f"Request #{id} is already {target.status}; only pending requests can be rejected."
+        )
+
+    now = datetime.now(timezone.utc)
+    target.status = RequestStatus.REJECTED.value
+    target.decided_by = admin.id
+    target.decided_at = now
+    target.decision_note = payload.note.strip() if payload.note and payload.note.strip() else "Rejected by administrator"
+
+    try:
+        record_server_event(
+            db=db,
+            event_type=EventType.REQUEST_REJECTED.value,
+            resource_id=target.resource_id,
+            request_id=target.id,
+            actor_user_id=admin.id,
+            note=target.decision_note,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(target)
+    return AccessRequestOut.from_orm_obj(target)
+
+
+@router.post(
+    "/credentials/{id}/revoke",
+    response_model=CredentialRevokeOut,
+    summary="Manually revoke active credential",
+    description="Manually revoke an active credential.",
+)
+def revoke_credential(
+    id: int,
+    payload: AdminRevokePayload,
+    db: Session = Depends(get_db),
+    admin: AuthenticatedUser = Depends(require_admin),
+) -> CredentialRevokeOut:
+    """
+    POST /admin/credentials/{id}/revoke
+    """
+    target = db.get(Credential, id)
+    if target is None:
+        raise err_not_found(f"Credential #{id} not found.")
+
+    if target.status != CredentialStatus.ACTIVE.value:
+        raise err_invalid_state(
+            f"Credential #{id} is already in terminal status '{target.status}'."
+        )
+
+    now = datetime.now(timezone.utc)
+    try:
+        target.status = CredentialStatus.REVOKED.value
+        target.revoke_reason = RevokeReason.ADMIN.value
+        target.revoked_at = now
+        target.revoked_by = admin.id
+        target.change_seq = allocate_next_change_seq(db)
+
+        # Update corresponding access request if present
+        parent_req = db.get(AccessRequest, target.request_id)
+        if parent_req and parent_req.status != RequestStatus.REVOKED.value:
+            parent_req.status = RequestStatus.REVOKED.value
+
+        note_text = payload.note.strip() if payload.note and payload.note.strip() else "Admin manual revocation"
+        record_server_event(
+            db=db,
+            event_type=EventType.CREDENTIAL_REVOKED.value,
+            reason=EventReason.REVOKED.value,
+            resource_id=target.resource_id,
+            request_id=target.request_id,
+            credential_id=target.id,
+            actor_user_id=admin.id,
+            note=note_text,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(target)
+    return CredentialRevokeOut(
+        id=target.id,
+        status=target.status,
+        revoke_reason=target.revoke_reason,
+        revoked_at=_format_utc_z(target.revoked_at) or "",
+        change_seq=target.change_seq,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin Audit Logs & Nodes (Person A)
+# ---------------------------------------------------------------------------
 
 @router.get(
     "/logs",
@@ -58,7 +377,7 @@ def get_admin_logs(
         description="Filter by source: 'all', 'device', or 'server'",
     ),
     db: Session = Depends(get_db),
-    _admin_user: User = Depends(require_admin),
+    _admin_user: AuthenticatedUser = Depends(require_admin),
 ) -> list[AdminLogEntryOut]:
     """
     GET /admin/logs?limit=100&source=all
@@ -128,7 +447,7 @@ def get_admin_logs(
 )
 def get_admin_nodes(
     db: Session = Depends(get_db),
-    _admin_user: User = Depends(require_admin),
+    _admin_user: AuthenticatedUser = Depends(require_admin),
 ) -> list[AdminNodeOut]:
     """
     GET /admin/nodes
@@ -139,7 +458,7 @@ def get_admin_nodes(
     server_seq = sync_state.current_seq if sync_state else 0
 
     nodes = db.query(Node).order_by(Node.id.asc()).all()
-    now_utc = datetime.now(timezone.utc)
+    now_utc_time = datetime.now(timezone.utc)
 
     results: list[AdminNodeOut] = []
     for node in nodes:
@@ -150,7 +469,7 @@ def get_admin_nodes(
                 ls = ls.replace(tzinfo=timezone.utc)
             else:
                 ls = ls.astimezone(timezone.utc)
-            is_online = (now_utc - ls).total_seconds() <= _settings.ONLINE_WINDOW_S
+            is_online = (now_utc_time - ls).total_seconds() <= _settings.ONLINE_WINDOW_S
 
         results.append(
             AdminNodeOut(

@@ -1,3 +1,14 @@
+"""
+main.py -- FastAPI application entry point for Digital Key Access Control API.
+
+Registers:
+  - Custom error handlers (AppError, DomainError, RequestValidationError, StarletteHTTPException)
+  - CORS middleware
+  - Person A and Person B routers (/auth, /resources, /access-requests, /admin, /device/v1)
+  - Operational health probe (GET /health)
+"""
+from __future__ import annotations
+
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,20 +22,14 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-try:
-    from app.config import get_settings
-    from app.db import get_db
-    from app.errors import register_error_handlers
-    from app.routers.admin import router as admin_router
-    from app.routers.resources import router as resources_router
-    from app.routers.access_requests import router as access_requests_router
-except ImportError:
-    from .config import get_settings
-    from .db import get_db
-    from .errors import register_error_handlers
-    from .routers.admin import router as admin_router
-    from .routers.resources import router as resources_router
-    from .routers.access_requests import router as access_requests_router
+from app.config import get_settings
+from app.db import get_db
+from app.errors import register_error_handlers
+from app.routers.access_requests import router as access_requests_router
+from app.routers.admin import router as admin_router
+from app.routers.auth import router as auth_router
+from app.routers.device import router as device_router
+from app.routers.resources import router as resources_router
 
 settings = get_settings()
 
@@ -48,15 +53,17 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Register Person A routers
+# Register Person A and Person B routers
 # ---------------------------------------------------------------------------
+app.include_router(auth_router)
 app.include_router(resources_router)
 app.include_router(access_requests_router)
 app.include_router(admin_router)
+app.include_router(device_router)
 
 
 # ---------------------------------------------------------------------------
-# Health probe (owned by Person B, kept in main.py per existing structure)
+# Operational Health probe
 # ---------------------------------------------------------------------------
 
 @app.get("/health", tags=["Operational"])
