@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -15,12 +15,14 @@ try:
     from app.config import get_settings
     from app.db import get_db
     from app.errors import register_error_handlers
+    from app.routers.admin import router as admin_router
     from app.routers.resources import router as resources_router
     from app.routers.access_requests import router as access_requests_router
 except ImportError:
     from .config import get_settings
     from .db import get_db
     from .errors import register_error_handlers
+    from .routers.admin import router as admin_router
     from .routers.resources import router as resources_router
     from .routers.access_requests import router as access_requests_router
 
@@ -50,6 +52,8 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 app.include_router(resources_router)
 app.include_router(access_requests_router)
+app.include_router(admin_router)
+
 
 
 # ---------------------------------------------------------------------------

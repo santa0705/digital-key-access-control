@@ -1,4 +1,4 @@
-﻿"""
+"""
 deps.py -- FastAPI dependencies shared across Person A routers.
 
 Provides:
@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.errors import err_unauthorized
+from app.errors import err_forbidden, err_unauthorized
 from app.models.users import User
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -74,3 +74,15 @@ def get_current_user(
         raise err_unauthorized("User not found or inactive.")
 
     return user
+
+
+def require_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """
+    Enforce that the authenticated user has the 'admin' role.
+    Raises DomainError "forbidden" (HTTP 403) for non-admin users.
+    """
+    if current_user.role != "admin":
+        raise err_forbidden("Admin privileges required.")
+    return current_user

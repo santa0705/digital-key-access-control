@@ -44,7 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.models.access_events import AccessEvent, EventReason, EventSource, EventType
 from app.models.access_requests import AccessRequest
-from app.models.credentials import Credential
+from app.models.credentials import Credential, CredentialStatus
 from app.models.resources import Resource
 
 
@@ -225,11 +225,24 @@ def ingest_device_event(
     # 2. Stale/Unknown credential check:
     actual_cred_id = credential_id
     actual_note = note
+    cred = None
     if credential_id is not None:
         cred = db.get(Credential, credential_id)
         if cred is None:
             actual_cred_id = None
             actual_note = f"{note}; unknown_credential" if note else "unknown_credential"
+
+    # 3. Credential consumption transition:
+    # If credential_accepted is received for an active credential, transition it to consumed
+    if event_type == EventType.CREDENTIAL_ACCEPTED.value and cred is not None:
+        if cred.status == CredentialStatus.ACTIVE.value:
+            from app.services.sequence import allocate_next_change_seq
+
+            cred.status = CredentialStatus.CONSUMED.value
+            cred.consumed_at = device_time or datetime.now(timezone.utc)
+            if node_id is not None:
+                cred.consumed_node_id = node_id
+            cred.change_seq = allocate_next_change_seq(db)
 
     event = AccessEvent(
         event_id=event_id,
