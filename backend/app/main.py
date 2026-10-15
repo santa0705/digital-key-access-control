@@ -14,9 +14,17 @@ if str(BACKEND_DIR) not in sys.path:
 try:
     from app.config import get_settings
     from app.db import get_db
+    from app.errors import register_error_handlers
+    from app.routers.admin import router as admin_router
+    from app.routers.resources import router as resources_router
+    from app.routers.access_requests import router as access_requests_router
 except ImportError:
     from .config import get_settings
     from .db import get_db
+    from .errors import register_error_handlers
+    from .routers.admin import router as admin_router
+    from .routers.resources import router as resources_router
+    from .routers.access_requests import router as access_requests_router
 
 settings = get_settings()
 
@@ -27,6 +35,9 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# Register custom error handlers (standard envelope + validation_error)
+register_error_handlers(app)
+
 # CORS middleware configured from CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
@@ -36,6 +47,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------------------------------------------------------------------
+# Register Person A routers
+# ---------------------------------------------------------------------------
+app.include_router(resources_router)
+app.include_router(access_requests_router)
+app.include_router(admin_router)
+
+
+# ---------------------------------------------------------------------------
+# Health probe (owned by Person B, kept in main.py per existing structure)
+# ---------------------------------------------------------------------------
 
 @app.get("/health", tags=["Operational"])
 def health_check(db: Session = Depends(get_db)):

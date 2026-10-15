@@ -94,10 +94,13 @@ stateDiagram-v2
 
 ### 3.1 Terminal Immutability Rule
 The states `consumed`, `expired`, and `revoked` are strictly **terminal**:
-- A terminal credential can **never** transition back to `active`.
+- A terminal credential can **never** transition back to `active` or to any other status.
+- Once terminal, a credential's core identity fields (`status`, `resource_id`, `request_id`, `pin_hmac`, `pin_encrypted`) cannot be modified.
+- Terminal credential rows cannot be deleted from the database.
 - Enforced at three levels:
   1. Service layer guarded updates (`UPDATE credentials SET status = :new WHERE status = 'active'`).
-  2. Database trigger preventing modifications to rows with terminal status.
+  2. Database trigger (`trg_credentials_terminal_immutability`) preventing illegal status mutations, validity alterations on non-active rows, identity alterations on terminal rows, and deletion of terminal credentials.
+
   3. Device local merge logic (Rule DR-4: local terminal markers can never be overwritten by incoming server sync packets).
 
 ### 3.2 Single Active Credential Policy (Rule R1)
