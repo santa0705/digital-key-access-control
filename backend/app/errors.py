@@ -104,6 +104,11 @@ class SyncStateInconsistentError(AppError):
         super().__init__(code="sync_state_inconsistent", message=message, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
+class UnknownNodeError(AppError):
+    def __init__(self, message: str = "Terminal node unrecognized by server."):
+        super().__init__(code="unknown_node", message=message, status_code=status.HTTP_404_NOT_FOUND)
+
+
 # ---------------------------------------------------------------------------
 # Convenience factory helpers (Person A)
 # ---------------------------------------------------------------------------

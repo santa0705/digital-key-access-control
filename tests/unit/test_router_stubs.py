@@ -188,10 +188,10 @@ def test_device_sync_requires_authentication():
     assert res.json()["error"]["code"] == "invalid_device_key"
 
 
-def test_device_sync_placeholder_returns_501_not_implemented():
+def test_device_sync_invalid_payload_returns_422():
     """
     Verify that POST /device/v1/sync with valid device authentication headers
-    returns 501 not_implemented placeholder error rather than fake sync state.
+    but invalid/empty payload returns 422 validation_error per contract §3.3.
     """
     from app.services.time_utils import now_utc_string
 
@@ -200,8 +200,7 @@ def test_device_sync_placeholder_returns_501_not_implemented():
         "X-Device-Timestamp": now_utc_string(),
     }
     res = client.post("/device/v1/sync", json={}, headers=headers)
-    assert res.status_code == 501
+    assert res.status_code == 422
     data = res.json()
     assert "error" in data
-    assert data["error"]["code"] == "not_implemented"
-    assert "server_time" not in data
+    assert data["error"]["code"] == "validation_error"

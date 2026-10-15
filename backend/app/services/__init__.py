@@ -8,7 +8,7 @@ Services:
   - credentials: PIN generation, HMAC calculation/verification, and Fernet encryption/decryption.
   - time_utils: Strict ISO-8601 UTC timestamp parsing, formatting, and freshness validation.
 """
-from app.services import access_requests, credentials, events, sequence, time_utils
+from app.services import access_requests, credentials, events, sequence, sync, time_utils
 from app.services.credentials import (
     compute_pin_hmac,
     decrypt_pin,
@@ -18,6 +18,11 @@ from app.services.credentials import (
     verify_pin_hmac,
 )
 from app.services.sequence import allocate_next_change_seq
+from app.services.sync import (
+    process_device_sync,
+    sign_sync_response,
+    verify_sync_response_signature,
+)
 from app.services.time_utils import (
     format_utc_timestamp,
     is_credential_window_active,
@@ -32,6 +37,7 @@ __all__ = [
     "events",
     "sequence",
     "credentials",
+    "sync",
     "time_utils",
     "allocate_next_change_seq",
     "compute_pin_hmac",
@@ -46,4 +52,7 @@ __all__ = [
     "now_utc",
     "now_utc_string",
     "parse_utc_timestamp",
+    "process_device_sync",
+    "sign_sync_response",
+    "verify_sync_response_signature",
 ]

@@ -16,6 +16,12 @@ from app.schemas.admin import (
     CredentialRevokeOut,
 )
 from app.schemas.auth import LoginRequest, LoginResponse, UserSummary
+from app.schemas.device import (
+    CredentialSyncOut,
+    DeviceEventIn,
+    DeviceSyncIn,
+    DeviceSyncOut,
+)
 from app.schemas.resources import ResourceOut
 
 __all__ = [
@@ -35,4 +41,8 @@ __all__ = [
     "LoginRequest",
     "LoginResponse",
     "UserSummary",
+    "DeviceEventIn",
+    "DeviceSyncIn",
+    "CredentialSyncOut",
+    "DeviceSyncOut",
 ]
