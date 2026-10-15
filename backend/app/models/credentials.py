@@ -110,7 +110,6 @@ class Credential(Base):
         BigInteger,
         unique=True,
         nullable=False,
-        index=True,
     )
     revoke_reason: Mapped[Optional[str]] = mapped_column(
         Text,

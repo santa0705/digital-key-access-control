@@ -102,7 +102,6 @@ class AccessEvent(Base):
         Text,
         unique=True,
         nullable=False,
-        index=True,
     )
     source: Mapped[str] = mapped_column(
         Text,

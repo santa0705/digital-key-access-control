@@ -37,7 +37,6 @@ class User(Base):
         Text,
         unique=True,
         nullable=False,
-        index=True,
     )
     full_name: Mapped[str] = mapped_column(
         Text,

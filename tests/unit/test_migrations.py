@@ -45,7 +45,7 @@ def test_alembic_target_metadata_contains_all_models():
     assert set(Base.metadata.tables.keys()) == expected_tables
 
 
-def test_alembic_offline_sql_generation_contains_critical_ddl(capsys: pytest.CaptureFixture):
+def test_alembic_offline_sql_generation_contains_critical_ddl(capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch):
     """
     Offline compilation test (requires no live database connection).
     Verifies that Alembic generates complete, valid PostgreSQL DDL with:
@@ -54,8 +54,12 @@ def test_alembic_offline_sql_generation_contains_critical_ddl(capsys: pytest.Cap
     - Monotonic change-seq procedure (next_change_seq)
     - Terminal immutability trigger and function
     - Descending audit index (ix_access_events_occurred_at_desc)
+    - Absence of redundant standalone indexes on unique columns
     """
     from alembic import command
+
+    monkeypatch.setenv("ALLOW_LOCAL_MIGRATION", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postgres:dummy@127.0.0.1:5432/digital_key")
 
     cfg = get_alembic_config()
 
@@ -95,13 +99,22 @@ def test_alembic_offline_sql_generation_contains_critical_ddl(capsys: pytest.Cap
     assert "CREATE INDEX ix_access_events_occurred_at_desc" in generated_sql
     assert "occurred_at DESC" in generated_sql
 
+    # 6. Verify 4 redundant standalone indexes were removed
+    assert "CREATE INDEX ix_users_email" not in generated_sql
+    assert "CREATE INDEX ix_resources_code" not in generated_sql
+    assert "CREATE INDEX ix_nodes_node_code" not in generated_sql
+    assert "CREATE INDEX ix_access_events_event_id" not in generated_sql
 
-def test_alembic_offline_downgrade_sql_generation(capsys: pytest.CaptureFixture):
+
+def test_alembic_offline_downgrade_sql_generation(capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch):
     """
     Offline downgrade test (requires no live database connection).
     Verifies that Alembic produces clean reverse DDL in exact reverse dependency order.
     """
     from alembic import command
+
+    monkeypatch.setenv("ALLOW_LOCAL_MIGRATION", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postgres:dummy@127.0.0.1:5432/digital_key")
 
     cfg = get_alembic_config()
 

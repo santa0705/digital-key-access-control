@@ -38,7 +38,6 @@ class Resource(Base):
         Text,
         unique=True,
         nullable=False,
-        index=True,
     )
     name: Mapped[str] = mapped_column(
         Text,

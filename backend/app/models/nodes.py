@@ -40,7 +40,6 @@ class Node(Base):
         Text,
         unique=True,
         nullable=False,
-        index=True,
     )
     firmware_version: Mapped[Optional[str]] = mapped_column(
         Text,

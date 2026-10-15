@@ -7,6 +7,10 @@ Create Date: 2026-10-13 22:00:00.000000
 Initial migration creating seven domain tables, check constraints,
 monotonic change sequence procedure, partial active credential unique index (Rule R1),
 terminal immutability trigger, and audit indexes.
+
+NOTE: Editing an already-applied initial revision does not update an existing database schema.
+In any environment where 0001_initial_schema has already been applied, schema
+modifications require a subsequent migration revision.
 """
 from typing import Sequence, Union
 
@@ -38,7 +42,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("email", name="uq_users_email"),
         sa.CheckConstraint("role IN ('user', 'admin')", name="ck_users_role"),
     )
-    op.create_index("ix_users_email", "users", ["email"])
 
     # -------------------------------------------------------------------------
     # 2. resources
@@ -56,7 +59,6 @@ def upgrade() -> None:
         sa.CheckConstraint("code IN ('A', 'B')", name="ck_resources_code"),
         sa.CheckConstraint("kind IN ('physical', 'simulated')", name="ck_resources_kind"),
     )
-    op.create_index("ix_resources_code", "resources", ["code"])
 
     # -------------------------------------------------------------------------
     # 3. nodes
@@ -77,7 +79,6 @@ def upgrade() -> None:
             name="ck_nodes_time_state",
         ),
     )
-    op.create_index("ix_nodes_node_code", "nodes", ["node_code"])
 
     # -------------------------------------------------------------------------
     # 4. sync_state
@@ -264,7 +265,6 @@ def upgrade() -> None:
             name="ck_access_events_device_time_trusted",
         ),
     )
-    op.create_index("ix_access_events_event_id", "access_events", ["event_id"])
 
     # Descending index for audit log queries
     op.execute("""

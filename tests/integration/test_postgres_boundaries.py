@@ -34,9 +34,34 @@ from app.models import (
     User,
 )
 
-# Detect live PostgreSQL connection URL
-_PG_URL = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL")
-_HAS_LIVE_POSTGRES = bool(_PG_URL and _PG_URL.startswith(("postgres://", "postgresql://")))
+# Detect live PostgreSQL connection URL: ONLY explicit TEST_DATABASE_URL is permitted.
+# NEVER fall back to DATABASE_URL to prevent accidental mutations against Neon or shared databases.
+def resolve_live_postgres_url() -> str | None:
+    """
+    Resolves the live PostgreSQL connection URL strictly from TEST_DATABASE_URL.
+    NEVER falls back to DATABASE_URL or other environment variables to guarantee
+    that shared/cloud databases (e.g. Neon) are never mutated.
+    """
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url or not url.startswith(("postgres://", "postgresql://", "postgresql+psycopg://")):
+        return None
+    return url
+
+
+_PG_URL = resolve_live_postgres_url()
+_HAS_LIVE_POSTGRES = _PG_URL is not None
+
+
+def test_regression_no_database_url_fallback(monkeypatch):
+    """
+    Regression test: ensures resolve_live_postgres_url() NEVER falls back to DATABASE_URL,
+    even when DATABASE_URL is set and TEST_DATABASE_URL is absent.
+    """
+    monkeypatch.delenv("TEST_DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:secret@ep-cool-neon.tech/neondb")
+
+    url = resolve_live_postgres_url()
+    assert url is None, "Live PostgreSQL URL must be None when TEST_DATABASE_URL is absent"
 
 
 # ---------------------------------------------------------------------------
@@ -137,21 +162,114 @@ class TestPostgresLiveRuntime:
     def test_live_next_change_seq_procedure(self, pg_engine):
         """Validates that next_change_seq() stored procedure executes and increments monotonically."""
         with pg_engine.connect() as conn:
-            res = conn.execute(text("SELECT next_change_seq()")).scalar()
-            assert isinstance(res, int)
-            assert res > 0
+            with conn.begin():
+                res1 = conn.execute(text("SELECT next_change_seq()")).scalar()
+                res2 = conn.execute(text("SELECT next_change_seq()")).scalar()
+                assert isinstance(res1, int) and res1 > 0
+                assert res2 == res1 + 1
 
     def test_live_partial_unique_index_rule_r1(self, pg_engine):
         """Validates that PostgreSQL engine strictly rejects a second active credential on same resource."""
-        # Gated for verified disposable PostgreSQL database
-        pass
+        import uuid
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy.exc import IntegrityError
+
+        now = datetime.now(timezone.utc)
+        unique_suffix = uuid.uuid4().hex[:8]
+
+        with pg_engine.connect() as conn:
+            with conn.begin():
+                u_id = conn.execute(
+                    text("INSERT INTO users (email, full_name, password_hash, role) VALUES (:e, 'U', 'h', 'user') RETURNING id"),
+                    {"e": f"r1_{unique_suffix}@demo.local"},
+                ).scalar()
+                # Use existing resource or insert a code
+                r_id = conn.execute(text("SELECT id FROM resources LIMIT 1")).scalar()
+                if not r_id:
+                    r_id = conn.execute(
+                        text("INSERT INTO resources (code, name, kind) VALUES ('A', 'Locker A', 'physical') RETURNING id")
+                    ).scalar()
+
+                req1 = conn.execute(
+                    text("INSERT INTO access_requests (user_id, resource_id, start_at, end_at, status) VALUES (:u, :r, :s, :e, 'approved') RETURNING id"),
+                    {"u": u_id, "r": r_id, "s": now, "e": now + timedelta(hours=1)},
+                ).scalar()
+                req2 = conn.execute(
+                    text("INSERT INTO access_requests (user_id, resource_id, start_at, end_at, status) VALUES (:u, :r, :s, :e, 'approved') RETURNING id"),
+                    {"u": u_id, "r": r_id, "s": now, "e": now + timedelta(hours=1)},
+                ).scalar()
+
+                # Clean any prior active credentials on this resource to isolate test
+                conn.execute(
+                    text("UPDATE credentials SET status = 'consumed' WHERE resource_id = :r AND status = 'active'"),
+                    {"r": r_id},
+                )
+
+                # First active credential on resource succeeds
+                conn.execute(
+                    text("INSERT INTO credentials (request_id, resource_id, pin_hmac, pin_encrypted, valid_from, valid_until, status, change_seq) "
+                         "VALUES (:req, :r, :hmac, 'enc', :s, :e, 'active', next_change_seq())"),
+                    {"req": req1, "r": r_id, "hmac": f"hmac1_{unique_suffix}", "s": now, "e": now + timedelta(hours=1)},
+                )
+
+                # Second active credential on same resource must fail
+                with pytest.raises(IntegrityError):
+                    conn.execute(
+                        text("INSERT INTO credentials (request_id, resource_id, pin_hmac, pin_encrypted, valid_from, valid_until, status, change_seq) "
+                             "VALUES (:req, :r, :hmac, 'enc', :s, :e, 'active', next_change_seq())"),
+                        {"req": req2, "r": r_id, "hmac": f"hmac2_{unique_suffix}", "s": now, "e": now + timedelta(hours=1)},
+                    )
 
     def test_live_terminal_immutability_trigger(self, pg_engine):
         """Validates that trg_credentials_terminal_immutability rejects modification or deletion of terminal credentials."""
-        # Gated for verified disposable PostgreSQL database
-        pass
+        import uuid
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy.exc import DBAPIError
+
+        now = datetime.now(timezone.utc)
+        unique_suffix = uuid.uuid4().hex[:8]
+
+        with pg_engine.connect() as conn:
+            with conn.begin():
+                u_id = conn.execute(
+                    text("INSERT INTO users (email, full_name, password_hash, role) VALUES (:e, 'U', 'h', 'user') RETURNING id"),
+                    {"e": f"term_{unique_suffix}@demo.local"},
+                ).scalar()
+                r_id = conn.execute(text("SELECT id FROM resources LIMIT 1")).scalar()
+                if not r_id:
+                    r_id = conn.execute(
+                        text("INSERT INTO resources (code, name, kind) VALUES ('A', 'Locker A', 'physical') RETURNING id")
+                    ).scalar()
+
+                req_id = conn.execute(
+                    text("INSERT INTO access_requests (user_id, resource_id, start_at, end_at, status) VALUES (:u, :r, :s, :e, 'approved') RETURNING id"),
+                    {"u": u_id, "r": r_id, "s": now, "e": now + timedelta(hours=1)},
+                ).scalar()
+
+                c_id = conn.execute(
+                    text("INSERT INTO credentials (request_id, resource_id, pin_hmac, pin_encrypted, valid_from, valid_until, status, change_seq) "
+                         "VALUES (:req, :r, :hmac, 'enc', :s, :e, 'active', next_change_seq()) RETURNING id"),
+                    {"req": req_id, "r": r_id, "hmac": f"hmac_{unique_suffix}", "s": now, "e": now + timedelta(hours=1)},
+                ).scalar()
+
+                # Transition to consumed
+                conn.execute(
+                    text("UPDATE credentials SET status = 'consumed', consumed_at = :now WHERE id = :cid"),
+                    {"now": now, "cid": c_id},
+                )
+
+                # Attempted modification must be rejected by trigger
+                with pytest.raises(DBAPIError, match="Terminal credential cannot be modified"):
+                    conn.execute(
+                        text("UPDATE credentials SET valid_until = :later WHERE id = :cid"),
+                        {"later": now + timedelta(hours=2), "cid": c_id},
+                    )
 
     def test_live_sync_state_deletion_protection_trigger(self, pg_engine):
         """Validates that trg_sync_state_protect_delete rejects any DELETE on sync_state."""
-        # Gated for verified disposable PostgreSQL database
-        pass
+        from sqlalchemy.exc import DBAPIError
+
+        with pg_engine.connect() as conn:
+            with conn.begin():
+                with pytest.raises(DBAPIError, match="Deleting sync_state singleton row is prohibited"):
+                    conn.execute(text("DELETE FROM sync_state WHERE id = 1"))

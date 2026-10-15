@@ -20,6 +20,7 @@ if ENV_FILE.exists():
 
 # Import shared models and declarative Base metadata
 from app.models import Base  # noqa: E402
+from app.migration_guard import validate_migration_target, mask_database_url  # noqa: E402
 
 # Alembic Config object
 config = context.config
@@ -31,25 +32,38 @@ if config.config_file_name is not None:
 # Set target metadata for migrations and autogenerate
 target_metadata = Base.metadata
 
-# Dynamically set sqlalchemy.url from environment variable or app.config
-database_url = os.getenv("DATABASE_URL")
-if not database_url:
+# Resolve effective database URL:
+# 1. -x url=<url> CLI argument
+# 2. -o sqlalchemy.url=<url> CLI or config override
+# 3. DATABASE_URL environment variable
+# 4. app.config.get_settings().DATABASE_URL
+x_args = context.get_x_argument(as_dictionary=True)
+cli_x_url = x_args.get("url") if isinstance(x_args, dict) else None
+main_opt_url = config.get_main_option("sqlalchemy.url")
+
+effective_url = cli_x_url or main_opt_url or os.getenv("DATABASE_URL")
+if not effective_url:
     try:
         from app.config import get_settings
-        database_url = get_settings().DATABASE_URL
+        effective_url = get_settings().DATABASE_URL
     except Exception:
-        database_url = None
+        effective_url = None
 
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+# Fail-closed validation before any connection, engine creation, or DDL execution
+validate_migration_target(effective_url)
+
+if effective_url:
+    config.set_main_option("sqlalchemy.url", effective_url)
 
 
 def run_migrations_offline() -> None:
     """
     Run migrations in 'offline' mode.
     Emits SQL statements directly without establishing a live database connection.
+    Guarded against unapproved targets and remote/cloud databases.
     """
     url = config.get_main_option("sqlalchemy.url")
+    validate_migration_target(url)
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -65,7 +79,10 @@ def run_migrations_online() -> None:
     """
     Run migrations in 'online' mode.
     Creates an Engine and associates a connection with the context.
+    Guarded against unapproved targets and remote/cloud databases.
     """
+    url = config.get_main_option("sqlalchemy.url")
+    validate_migration_target(url)
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

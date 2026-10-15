@@ -18,6 +18,13 @@ class Settings(BaseSettings):
         "postgresql+psycopg://digital_key_user:placeholder@localhost:5432/digital_key"
     )
 
+    # Migration safety guard settings (fail-closed by default)
+    ALLOW_LOCAL_MIGRATION: bool = False
+    APPROVED_MIGRATION_HOSTS: str = "localhost,127.0.0.1,::1"
+    APPROVED_MIGRATION_PORTS: str = "5432"
+    APPROVED_MIGRATION_DB_NAMES: str = "digital_key"
+    APPROVED_MIGRATION_USERS: str = ""
+
     # Authentication & cryptographic keys
     JWT_SECRET: str = "replace_with_generated_jwt_secret_hex_32_bytes"
     PIN_HMAC_KEY: str = "replace_with_generated_hmac_key_hex_32_bytes"
