@@ -1,8 +1,11 @@
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import re
 import secrets
+from typing import Optional
 from cryptography.fernet import Fernet, InvalidToken
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
 
@@ -69,9 +72,10 @@ def get_fernet_cipher(enc_key: str | None = None) -> Fernet:
     Constructs a Fernet cipher instance using the configured or provided key.
     Raises ValueError with a sanitized message on invalid key configuration.
     """
-    key = enc_key if enc_key is not None else get_settings().PIN_ENC_KEY
-    if not key:
-        raise ValueError("PIN encryption key is not configured.")
+    raw_key = enc_key if enc_key is not None else get_settings().PIN_ENC_KEY
+    key = (raw_key or "").strip()
+    if not key or key.startswith("replace_with_"):
+        raise ValueError("PIN encryption key is not configured or uses placeholder template.")
 
     try:
         key_bytes = key.encode("utf-8")
@@ -114,3 +118,60 @@ def decrypt_pin(pin_encrypted: str, enc_key: str | None = None) -> str:
         raise ValueError("Decrypted payload is not a valid 6-digit PIN.")
 
     return decrypted_pin
+
+
+def sweep_expired_credentials(
+    db: Session,
+    resource_id: Optional[int] = None,
+    now: Optional[datetime] = None,
+) -> list:
+    """
+    Performs the policy-mandated expiry sweep (docs/credential-policy.md Sections 3.1 & 4.1).
+    Sweeps active credentials where valid_until <= now.
+    Atomically updates status to 'expired', advances change_seq via allocate_next_change_seq(),
+    and emits 'credential_expired' audit events.
+    """
+    from app.models.access_events import EventReason, EventType
+    from app.models.credentials import Credential, CredentialStatus
+    from app.services.events import record_server_event
+    from app.services.sequence import allocate_next_change_seq
+
+    check_time = now if now is not None else datetime.now(timezone.utc)
+    if check_time.tzinfo is None:
+        check_time = check_time.replace(tzinfo=timezone.utc)
+
+    query = (
+        db.query(Credential)
+        .filter(
+            Credential.status == CredentialStatus.ACTIVE.value,
+            Credential.valid_until <= check_time,
+        )
+    )
+    if resource_id is not None:
+        query = query.filter(Credential.resource_id == resource_id)
+
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        query = query.with_for_update()
+
+    expired_creds = query.order_by(Credential.id.asc()).all()
+    swept = []
+    for cred in expired_creds:
+        next_seq = allocate_next_change_seq(db)
+        cred.status = CredentialStatus.EXPIRED.value
+        cred.change_seq = next_seq
+        record_server_event(
+            db=db,
+            event_type=EventType.CREDENTIAL_EXPIRED.value,
+            reason=EventReason.EXPIRED.value,
+            resource_id=cred.resource_id,
+            request_id=cred.request_id,
+            credential_id=cred.id,
+            note="Automatic expiration sweep: valid_until passed",
+        )
+        swept.append(cred)
+
+    if swept:
+        db.flush()
+
+    return swept

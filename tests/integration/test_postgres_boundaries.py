@@ -151,6 +151,8 @@ class TestPostgresLiveRuntime:
     """
     Live runtime tests that exercise PostgreSQL-only engine features.
     These are skipped during standard local SQLite runs to keep unit tests fast and hermetic.
+    All tests execute inside rollback transactions and use isolated resource fixtures
+    so that existing database records are never modified.
     """
 
     @pytest.fixture
@@ -162,11 +164,14 @@ class TestPostgresLiveRuntime:
     def test_live_next_change_seq_procedure(self, pg_engine):
         """Validates that next_change_seq() stored procedure executes and increments monotonically."""
         with pg_engine.connect() as conn:
-            with conn.begin():
+            trans = conn.begin()
+            try:
                 res1 = conn.execute(text("SELECT next_change_seq()")).scalar()
                 res2 = conn.execute(text("SELECT next_change_seq()")).scalar()
                 assert isinstance(res1, int) and res1 > 0
                 assert res2 == res1 + 1
+            finally:
+                trans.rollback()
 
     def test_live_partial_unique_index_rule_r1(self, pg_engine):
         """Validates that PostgreSQL engine strictly rejects a second active credential on same resource."""
@@ -178,16 +183,17 @@ class TestPostgresLiveRuntime:
         unique_suffix = uuid.uuid4().hex[:8]
 
         with pg_engine.connect() as conn:
-            with conn.begin():
+            trans = conn.begin()
+            try:
                 u_id = conn.execute(
                     text("INSERT INTO users (email, full_name, password_hash, role) VALUES (:e, 'U', 'h', 'user') RETURNING id"),
                     {"e": f"r1_{unique_suffix}@demo.local"},
                 ).scalar()
-                # Use existing resource or insert a code
-                r_id = conn.execute(text("SELECT id FROM resources LIMIT 1")).scalar()
+                # Use Locker B (resource code 'B') which has no existing credentials
+                r_id = conn.execute(text("SELECT id FROM resources WHERE code = 'B'")).scalar()
                 if not r_id:
                     r_id = conn.execute(
-                        text("INSERT INTO resources (code, name, kind) VALUES ('A', 'Locker A', 'physical') RETURNING id")
+                        text("INSERT INTO resources (code, name, kind) VALUES ('B', 'Locker B', 'physical') RETURNING id")
                     ).scalar()
 
                 req1 = conn.execute(
@@ -199,12 +205,6 @@ class TestPostgresLiveRuntime:
                     {"u": u_id, "r": r_id, "s": now, "e": now + timedelta(hours=1)},
                 ).scalar()
 
-                # Clean any prior active credentials on this resource to isolate test
-                conn.execute(
-                    text("UPDATE credentials SET status = 'consumed' WHERE resource_id = :r AND status = 'active'"),
-                    {"r": r_id},
-                )
-
                 # First active credential on resource succeeds
                 conn.execute(
                     text("INSERT INTO credentials (request_id, resource_id, pin_hmac, pin_encrypted, valid_from, valid_until, status, change_seq) "
@@ -214,11 +214,14 @@ class TestPostgresLiveRuntime:
 
                 # Second active credential on same resource must fail
                 with pytest.raises(IntegrityError):
-                    conn.execute(
-                        text("INSERT INTO credentials (request_id, resource_id, pin_hmac, pin_encrypted, valid_from, valid_until, status, change_seq) "
-                             "VALUES (:req, :r, :hmac, 'enc', :s, :e, 'active', next_change_seq())"),
-                        {"req": req2, "r": r_id, "hmac": f"hmac2_{unique_suffix}", "s": now, "e": now + timedelta(hours=1)},
-                    )
+                    with conn.begin_nested():
+                        conn.execute(
+                            text("INSERT INTO credentials (request_id, resource_id, pin_hmac, pin_encrypted, valid_from, valid_until, status, change_seq) "
+                                 "VALUES (:req, :r, :hmac, 'enc', :s, :e, 'active', next_change_seq())"),
+                            {"req": req2, "r": r_id, "hmac": f"hmac2_{unique_suffix}", "s": now, "e": now + timedelta(hours=1)},
+                        )
+            finally:
+                trans.rollback()
 
     def test_live_terminal_immutability_trigger(self, pg_engine):
         """Validates that trg_credentials_terminal_immutability rejects modification or deletion of terminal credentials."""
@@ -230,15 +233,16 @@ class TestPostgresLiveRuntime:
         unique_suffix = uuid.uuid4().hex[:8]
 
         with pg_engine.connect() as conn:
-            with conn.begin():
+            trans = conn.begin()
+            try:
                 u_id = conn.execute(
                     text("INSERT INTO users (email, full_name, password_hash, role) VALUES (:e, 'U', 'h', 'user') RETURNING id"),
                     {"e": f"term_{unique_suffix}@demo.local"},
                 ).scalar()
-                r_id = conn.execute(text("SELECT id FROM resources LIMIT 1")).scalar()
+                r_id = conn.execute(text("SELECT id FROM resources WHERE code = 'B'")).scalar()
                 if not r_id:
                     r_id = conn.execute(
-                        text("INSERT INTO resources (code, name, kind) VALUES ('A', 'Locker A', 'physical') RETURNING id")
+                        text("INSERT INTO resources (code, name, kind) VALUES ('B', 'Locker B', 'physical') RETURNING id")
                     ).scalar()
 
                 req_id = conn.execute(
@@ -260,16 +264,67 @@ class TestPostgresLiveRuntime:
 
                 # Attempted modification must be rejected by trigger
                 with pytest.raises(DBAPIError, match="Terminal credential cannot be modified"):
-                    conn.execute(
-                        text("UPDATE credentials SET valid_until = :later WHERE id = :cid"),
-                        {"later": now + timedelta(hours=2), "cid": c_id},
-                    )
+                    with conn.begin_nested():
+                        conn.execute(
+                            text("UPDATE credentials SET valid_until = :later WHERE id = :cid"),
+                            {"later": now + timedelta(hours=2), "cid": c_id},
+                        )
+            finally:
+                trans.rollback()
 
     def test_live_sync_state_deletion_protection_trigger(self, pg_engine):
         """Validates that trg_sync_state_protect_delete rejects any DELETE on sync_state."""
         from sqlalchemy.exc import DBAPIError
 
         with pg_engine.connect() as conn:
-            with conn.begin():
+            trans = conn.begin()
+            try:
                 with pytest.raises(DBAPIError, match="Deleting sync_state singleton row is prohibited"):
-                    conn.execute(text("DELETE FROM sync_state WHERE id = 1"))
+                    with conn.begin_nested():
+                        conn.execute(text("DELETE FROM sync_state WHERE id = 1"))
+            finally:
+                trans.rollback()
+
+    def test_live_postgres_credential_expiry_sweep(self, pg_engine):
+        """Validates that sweep_expired_credentials executes with SELECT FOR UPDATE and increments change_seq via next_change_seq() on live PostgreSQL."""
+        import uuid
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy.orm import Session
+        from app.models.credentials import Credential, CredentialStatus
+        from app.services.credentials import sweep_expired_credentials
+
+        now = datetime.now(timezone.utc)
+        unique_suffix = uuid.uuid4().hex[:8]
+
+        with pg_engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                u_id = conn.execute(
+                    text("INSERT INTO users (email, full_name, password_hash, role) VALUES (:e, 'U', 'h', 'user') RETURNING id"),
+                    {"e": f"swp_{unique_suffix}@demo.local"},
+                ).scalar()
+                r_id = conn.execute(text("SELECT id FROM resources WHERE code = 'B'")).scalar()
+                if not r_id:
+                    r_id = conn.execute(
+                        text("INSERT INTO resources (code, name, kind) VALUES ('B', 'Locker B', 'physical') RETURNING id")
+                    ).scalar()
+                req_id = conn.execute(
+                    text("INSERT INTO access_requests (user_id, resource_id, start_at, end_at, status) VALUES (:u, :r, :s, :e, 'approved') RETURNING id"),
+                    {"u": u_id, "r": r_id, "s": now - timedelta(hours=2), "e": now - timedelta(hours=1)},
+                ).scalar()
+                c_id = conn.execute(
+                    text("INSERT INTO credentials (request_id, resource_id, pin_hmac, pin_encrypted, valid_from, valid_until, status, change_seq) "
+                         "VALUES (:req, :r, :hmac, 'enc', :s, :e, 'active', next_change_seq()) RETURNING id"),
+                    {"req": req_id, "r": r_id, "hmac": f"hmac_{unique_suffix}", "s": now - timedelta(hours=2), "e": now - timedelta(hours=1)},
+                ).scalar()
+
+                session = Session(bind=conn)
+                swept = sweep_expired_credentials(session, resource_id=r_id, now=now)
+                assert len(swept) == 1
+                assert swept[0].id == c_id
+                assert swept[0].status == CredentialStatus.EXPIRED.value
+
+                db_status = conn.execute(text("SELECT status FROM credentials WHERE id = :cid"), {"cid": c_id}).scalar()
+                assert db_status == "expired"
+            finally:
+                trans.rollback()

@@ -18,7 +18,7 @@ import Button from '../components/Button';
 import Modal from '../components/Modal';
 import StatCard from '../components/StatCard';
 import Toast from '../components/Toast';
-import { formatTimeRange, formatUtcDateTime, calculateDuration } from '../utils/dateUtils';
+import { formatTimeRange, formatIstDateTime, calculateDuration } from '../utils/dateUtils';
 
 export default function AdminPending() {
   const [requests, setRequests] = useState([]);
@@ -58,9 +58,14 @@ export default function AdminPending() {
     setLoading(true);
     try {
       const data = await adminApi.getAccessRequests('all');
-      setRequests(data);
+      setRequests(Array.isArray(data) ? data : []);
     } catch (err) {
-      setToast({ type: 'error', message: `Failed to load requests: ${err.message}` });
+      const msg = err.code === 'unauthorized'
+        ? 'Authentication required. Please sign in as an administrator.'
+        : err.code === 'network_error'
+        ? `Could not reach backend at ${adminApi.getBaseUrl()}. Please ensure the backend is running.`
+        : `Failed to load requests: ${err.message}`;
+      setToast({ type: 'error', message: msg });
     } finally {
       setLoading(false);
     }
@@ -170,11 +175,20 @@ export default function AdminPending() {
       // Refresh to capture any superseded requests
       loadRequests();
     } catch (err) {
-      setApproveModal((prev) => ({
-        ...prev,
-        isSubmitting: false,
-        errorMessage: err.message || 'Failed to approve request'
-      }));
+      if (err.code === 'active_credential_exists') {
+        setApproveModal((prev) => ({
+          ...prev,
+          isSubmitting: false,
+          activeCredentialConflict: prev.activeCredentialConflict || { resource: request.resource },
+          errorMessage: 'An active credential already exists for this resource. Check "Replace existing credential" to supersede it.'
+        }));
+      } else {
+        setApproveModal((prev) => ({
+          ...prev,
+          isSubmitting: false,
+          errorMessage: err.message || 'Failed to approve request'
+        }));
+      }
     }
   };
 
@@ -358,7 +372,7 @@ export default function AdminPending() {
               <th style={{ width: '70px' }}>ID</th>
               <th>Requester</th>
               <th>Resource</th>
-              <th>Requested Validity (UTC)</th>
+              <th>Requested Validity (IST)</th>
               <th>Purpose</th>
               <th style={{ width: '100px' }}>Status</th>
               <th style={{ width: '130px' }}>Created</th>
@@ -442,7 +456,7 @@ export default function AdminPending() {
                     </td>
                     <td>
                       <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                        {formatUtcDateTime(req.created_at)}
+                        {formatIstDateTime(req.created_at)}
                       </span>
                     </td>
                     <td style={{ textAlign: 'right' }}>
@@ -716,14 +730,14 @@ export default function AdminPending() {
             <div className="summary-row">
               <span className="summary-key">Submitted At:</span>
               <span className="summary-val" style={{ fontSize: '11px' }}>
-                {formatUtcDateTime(detailModal.request.created_at)}
+                {formatIstDateTime(detailModal.request.created_at)}
               </span>
             </div>
             {detailModal.request.decided_at && (
               <div className="summary-row">
                 <span className="summary-key">Decided At:</span>
                 <span className="summary-val" style={{ fontSize: '11px' }}>
-                  {formatUtcDateTime(detailModal.request.decided_at)}
+                  {formatIstDateTime(detailModal.request.decided_at)}
                 </span>
               </div>
             )}

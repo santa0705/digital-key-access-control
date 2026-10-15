@@ -1,63 +1,50 @@
-import { useState } from 'react';
-import { Shield, Terminal } from 'lucide-react';
-import { formatUtcDateTime } from '../utils/dateUtils';
-
-const MOCK_AUDIT_LOGS = [
-  {
-    id: 48,
-    source: 'server',
-    event_id: 'srv-7a1b8c2d',
-    event_type: 'credential_issued',
-    resource_code: 'A',
-    request_id: 101,
-    actor: 'admin@demo.local',
-    occurred_at: '2026-10-14T08:15:40Z',
-    note: 'Issued under Rule R1'
-  },
-  {
-    id: 47,
-    source: 'device',
-    event_id: 'node-01-000184-fa2b10cd',
-    event_type: 'pin_verified',
-    resource_code: 'B',
-    request_id: 91,
-    actor: 'node-01',
-    occurred_at: '2026-10-14T07:45:12Z',
-    note: 'Hardware relay unlocked'
-  },
-  {
-    id: 46,
-    source: 'server',
-    event_id: 'srv-3b91c4ea',
-    event_type: 'credential_revoked',
-    resource_code: 'A',
-    request_id: 92,
-    actor: 'admin@demo.local',
-    occurred_at: '2026-10-13T14:45:12Z',
-    note: 'Admin manual revocation'
-  },
-  {
-    id: 45,
-    source: 'device',
-    event_id: 'node-01-000183-bc88ef12',
-    event_type: 'pin_rejected',
-    resource_code: 'A',
-    request_id: null,
-    actor: 'node-01',
-    occurred_at: '2026-10-13T12:04:19Z',
-    note: 'Wrong PIN entered (fail counter incremented)'
-  }
-];
+import { useState, useEffect } from 'react';
+import { Shield, Terminal, RefreshCw, AlertCircle, Inbox } from 'lucide-react';
+import { adminApi } from '../services/adminApi';
+import { formatIstDateTime } from '../utils/dateUtils';
+import Toast from '../components/Toast';
+import Button from '../components/Button';
 
 export default function AdminLogs() {
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
 
-  const filtered = MOCK_AUDIT_LOGS.filter((l) =>
-    sourceFilter === 'all' ? true : l.source === sourceFilter
-  );
+  const loadLogs = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await adminApi.getAdminLogs({ limit: 100, source: sourceFilter });
+      setLogs(Array.isArray(data) ? data : []);
+    } catch (err) {
+      const msg = err.code === 'unauthorized'
+        ? 'Authentication required. Please sign in as an administrator.'
+        : err.code === 'network_error'
+        ? `Could not reach backend at ${adminApi.getBaseUrl()}. Please ensure the backend server is running.`
+        : err.message || 'Failed to load security audit logs.';
+      setError(msg);
+      setToast({ type: 'error', message: msg });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadLogs();
+  }, [sourceFilter]);
 
   return (
     <div className="admin-page-container">
+      {toast && (
+        <Toast
+          type={toast.type}
+          message={toast.message}
+          onClose={() => setToast(null)}
+        />
+      )}
+
       <div className="page-header">
         <div>
           <h1 className="page-title">Unified Security Audit Logs</h1>
@@ -65,6 +52,15 @@ export default function AdminLogs() {
             Chronological audit stream combining ESP32 edge terminal events and central server operations (<code>/admin/logs</code>).
           </p>
         </div>
+        <Button
+          variant="secondary"
+          icon={RefreshCw}
+          onClick={loadLogs}
+          disabled={loading}
+          loading={loading}
+        >
+          Refresh Logs
+        </Button>
       </div>
 
       <div className="toolbar-bar">
@@ -93,6 +89,16 @@ export default function AdminLogs() {
         </div>
       </div>
 
+      {error && (
+        <div className="alert-box alert-danger" style={{ marginBottom: '16px' }}>
+          <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ flex: 1 }}>{error}</div>
+          <Button variant="secondary" size="sm" onClick={loadLogs}>
+            Retry
+          </Button>
+        </div>
+      )}
+
       <div className="table-wrapper">
         <table className="admin-table">
           <thead>
@@ -103,58 +109,83 @@ export default function AdminLogs() {
               <th>Event Type</th>
               <th>Resource</th>
               <th>Actor</th>
-              <th>Timestamp (UTC)</th>
+              <th>Timestamp (IST)</th>
               <th>Details</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((log) => (
-              <tr key={log.id}>
-                <td>
-                  <span className="id-badge">#{log.id}</span>
-                </td>
-                <td>
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      fontSize: '11px',
-                      textTransform: 'uppercase',
-                      fontWeight: 600,
-                      color: log.source === 'device' ? '#2563eb' : '#059669'
-                    }}
-                  >
-                    {log.source === 'device' ? <Terminal size={12} /> : <Shield size={12} />}
-                    {log.source}
-                  </span>
-                </td>
-                <td>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>
-                    {log.event_id}
-                  </span>
-                </td>
-                <td>
-                  <span style={{ fontWeight: 600, fontSize: '12px' }}>
-                    {log.event_type}
-                  </span>
-                </td>
-                <td>
-                  <span className="resource-code">{log.resource_code}</span>
-                </td>
-                <td>
-                  <span style={{ fontSize: '12px' }}>{log.actor}</span>
-                </td>
-                <td>
-                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                    {formatUtcDateTime(log.occurred_at)}
-                  </span>
-                </td>
-                <td>
-                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{log.note}</span>
+            {loading ? (
+              <tr>
+                <td colSpan={8} style={{ textAlign: 'center', padding: '36px' }}>
+                  <div className="btn-spinner" style={{ margin: '0 auto 8px', width: '18px', height: '18px' }} />
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Loading security audit logs...</span>
                 </td>
               </tr>
-            ))}
+            ) : logs.length === 0 ? (
+              <tr>
+                <td colSpan={8}>
+                  <div className="empty-state">
+                    <div className="empty-state-icon">
+                      <Inbox size={20} />
+                    </div>
+                    <div className="empty-state-title">No audit logs found</div>
+                    <div className="empty-state-desc">
+                      {error ? 'Failed to fetch logs from backend.' : `No ${sourceFilter !== 'all' ? sourceFilter : ''} security events recorded yet.`}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              logs.map((log) => (
+                <tr key={log.id}>
+                  <td>
+                    <span className="id-badge">#{log.id}</span>
+                  </td>
+                  <td>
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        textTransform: 'uppercase',
+                        fontWeight: 600,
+                        color: log.source === 'device' ? '#2563eb' : '#059669'
+                      }}
+                    >
+                      {log.source === 'device' ? <Terminal size={12} /> : <Shield size={12} />}
+                      {log.source}
+                    </span>
+                  </td>
+                  <td>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      {log.event_id}
+                    </span>
+                  </td>
+                  <td>
+                    <span style={{ fontWeight: 600, fontSize: '12px' }}>
+                      {log.event_type}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="resource-code">{log.resource_code || '—'}</span>
+                  </td>
+                  <td>
+                    <span style={{ fontSize: '12px' }}>{log.actor || '—'}</span>
+                  </td>
+                  <td>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      {formatIstDateTime(log.occurred_at)}
+                    </span>
+                  </td>
+                  <td>
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      {log.note || '—'}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>

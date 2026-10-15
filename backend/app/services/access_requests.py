@@ -195,6 +195,14 @@ def reveal_pin_for_owner(
             )
         raise err_pin_unavailable(msg)
 
+    # Expiry enforcement: reject if current time has reached or passed valid_until
+    now = datetime.now(timezone.utc)
+    until = cred.valid_until if cred.valid_until.tzinfo else cred.valid_until.replace(tzinfo=timezone.utc)
+    if now >= until:
+        raise err_pin_unavailable(
+            f"PIN is not available: credential {cred.id} validity window has expired."
+        )
+
     # Decrypt plain PIN
     plain_pin = decrypt_pin(cred.pin_encrypted)
 

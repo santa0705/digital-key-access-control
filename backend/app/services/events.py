@@ -238,11 +238,12 @@ def ingest_device_event(
         if cred.status == CredentialStatus.ACTIVE.value:
             from app.services.sequence import allocate_next_change_seq
 
+            seq = allocate_next_change_seq(db)
             cred.status = CredentialStatus.CONSUMED.value
             cred.consumed_at = device_time or datetime.now(timezone.utc)
             if node_id is not None:
                 cred.consumed_node_id = node_id
-            cred.change_seq = allocate_next_change_seq(db)
+            cred.change_seq = seq
 
     event = AccessEvent(
         event_id=event_id,

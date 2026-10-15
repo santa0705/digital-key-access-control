@@ -31,13 +31,38 @@ from app.routers.auth import router as auth_router
 from app.routers.device import router as device_router
 from app.routers.resources import router as resources_router
 
+from contextlib import asynccontextmanager
+
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Server lifespan lifecycle handler.
+    Validates cryptographic keys on server boot per docs/credential-policy.md §2.1.
+    Specifically validates Fernet(PIN_ENC_KEY). Fails fast if PIN_ENC_KEY is missing,
+    unconfigured, or set to placeholder.
+    """
+    from app.services.credentials import get_fernet_cipher
+    try:
+        get_fernet_cipher()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Server boot failed: {exc} "
+            "Please configure a valid 32-byte URL-safe base64 Fernet key via the PIN_ENC_KEY "
+            "environment variable (e.g. $env:PIN_ENC_KEY) or in .env. "
+            "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+        ) from exc
+    yield
+
 
 app = FastAPI(
     title="Digital Key Access Control API",
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Register custom error handlers (standard envelope + validation_error)
@@ -46,7 +71,12 @@ register_error_handlers(app)
 # CORS middleware configured from CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -15,7 +15,7 @@ import Button from '../components/Button';
 import Modal from '../components/Modal';
 import StatCard from '../components/StatCard';
 import Toast from '../components/Toast';
-import { formatTimeRange, formatUtcDateTime, isWindowActive } from '../utils/dateUtils';
+import { formatTimeRange, formatIstDateTime, isWindowActive, getEffectiveCredentialStatus } from '../utils/dateUtils';
 
 export default function AdminCredentials() {
   const [credentials, setCredentials] = useState([]);
@@ -46,9 +46,14 @@ export default function AdminCredentials() {
     setLoading(true);
     try {
       const data = await adminApi.getCredentials('all');
-      setCredentials(data);
+      setCredentials(Array.isArray(data) ? data : []);
     } catch (err) {
-      setToast({ type: 'error', message: `Failed to load credentials: ${err.message}` });
+      const msg = err.code === 'unauthorized'
+        ? 'Authentication required. Please sign in as an administrator.'
+        : err.code === 'network_error'
+        ? `Could not reach backend at ${adminApi.getBaseUrl()}. Please ensure the backend is running.`
+        : `Failed to load credentials: ${err.message}`;
+      setToast({ type: 'error', message: msg });
     } finally {
       setLoading(false);
     }
@@ -61,7 +66,8 @@ export default function AdminCredentials() {
   // Filter credentials
   const filteredCredentials = useMemo(() => {
     return credentials.filter((c) => {
-      if (statusFilter !== 'all' && c.status !== statusFilter) {
+      const effectiveStatus = getEffectiveCredentialStatus(c);
+      if (statusFilter !== 'all' && effectiveStatus !== statusFilter) {
         return false;
       }
       if (searchQuery.trim()) {
@@ -78,10 +84,17 @@ export default function AdminCredentials() {
   // Stats
   const stats = useMemo(() => {
     const total = credentials.length;
-    const active = credentials.filter((c) => c.status === 'active').length;
-    const consumed = credentials.filter((c) => c.status === 'consumed').length;
-    const expired = credentials.filter((c) => c.status === 'expired').length;
-    const revoked = credentials.filter((c) => c.status === 'revoked').length;
+    let active = 0;
+    let consumed = 0;
+    let expired = 0;
+    let revoked = 0;
+    for (const c of credentials) {
+      const eff = getEffectiveCredentialStatus(c);
+      if (eff === 'active') active++;
+      else if (eff === 'consumed') consumed++;
+      else if (eff === 'expired') expired++;
+      else if (eff === 'revoked') revoked++;
+    }
     return { total, active, consumed, expired, revoked };
   }, [credentials]);
 
@@ -278,7 +291,7 @@ export default function AdminCredentials() {
               <th>Resource</th>
               <th>Owner / Requester</th>
               <th>PIN Secret</th>
-              <th>Validity Window (UTC)</th>
+              <th>Validity Window (IST)</th>
               <th style={{ width: '100px' }}>Status</th>
               <th style={{ width: '110px' }}>Sync Seq</th>
               <th style={{ textAlign: 'right', width: '130px' }}>Actions</th>
@@ -320,7 +333,9 @@ export default function AdminCredentials() {
               </tr>
             ) : (
               filteredCredentials.map((cred) => {
-                const isActive = cred.status === 'active';
+                const effectiveStatus = getEffectiveCredentialStatus(cred);
+                const isActive = effectiveStatus === 'active';
+                const isExpired = effectiveStatus === 'expired';
                 const isCurrent = isWindowActive(cred.valid_from, cred.valid_until);
 
                 return (
@@ -361,16 +376,21 @@ export default function AdminCredentials() {
                             {isCurrent ? '● Active now' : 'Upcoming window'}
                           </span>
                         )}
+                        {isExpired && (
+                          <span className="time-meta" style={{ color: 'var(--text-muted)' }}>
+                            ● Expired window
+                          </span>
+                        )}
                         {cred.revoked_at && (
                           <span className="time-meta" style={{ color: 'var(--danger-text)' }}>
-                            Revoked: {formatUtcDateTime(cred.revoked_at)}
+                            Revoked: {formatIstDateTime(cred.revoked_at)}
                             {cred.revoke_reason && ` (${cred.revoke_reason})`}
                           </span>
                         )}
                       </div>
                     </td>
                     <td>
-                      <Badge status={cred.status} />
+                      <Badge status={effectiveStatus} />
                     </td>
                     <td>
                       <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>
@@ -394,7 +414,7 @@ export default function AdminCredentials() {
                             size="sm"
                             variant="secondary"
                             icon={Info}
-                            onClick={() => setDetailModal({ isOpen: true, credential: cred })}
+                            onClick={() => setDetailModal({ isOpen: true, credential: { ...cred, status: effectiveStatus } })}
                           >
                             Details
                           </Button>
@@ -561,7 +581,7 @@ export default function AdminCredentials() {
               <div className="summary-row">
                 <span className="summary-key">Revoked At:</span>
                 <span className="summary-val" style={{ fontSize: '11px' }}>
-                  {formatUtcDateTime(detailModal.credential.revoked_at)}
+                  {formatIstDateTime(detailModal.credential.revoked_at)}
                 </span>
               </div>
             )}

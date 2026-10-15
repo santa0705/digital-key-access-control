@@ -96,9 +96,16 @@ class CredentialSummary(BaseModel):
 
     @classmethod
     def from_orm_obj(cls, cred) -> "CredentialSummary":
+        effective_status = cred.status
+        if cred.status == "active":
+            now = datetime.now(timezone.utc)
+            until = cred.valid_until if cred.valid_until.tzinfo else cred.valid_until.replace(tzinfo=timezone.utc)
+            if now >= until:
+                effective_status = "expired"
+
         return cls(
             id=cred.id,
-            status=cred.status,
+            status=effective_status,
             valid_from=_fmt_utc_z(cred.valid_from),
             valid_until=_fmt_utc_z(cred.valid_until),
             revoke_reason=cred.revoke_reason,

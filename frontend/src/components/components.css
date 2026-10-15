@@ -128,6 +128,17 @@
   color: #ffffff;
 }
 
+.status-dot-demo {
+  background-color: #f59e0b !important;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25) !important;
+}
+
+.btn-reset-mock.active-demo {
+  background-color: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
 .admin-user-badge {
   display: flex;
   align-items: center;

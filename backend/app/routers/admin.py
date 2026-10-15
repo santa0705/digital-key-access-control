@@ -24,6 +24,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.deps import AuthenticatedUser, require_admin
 from app.errors import (
+    AppError,
     err_active_credential_exists,
     err_invalid_state,
     err_not_found,
@@ -43,7 +44,12 @@ from app.schemas.admin import (
     AdminRevokePayload,
     CredentialRevokeOut,
 )
-from app.services.credentials import compute_pin_hmac, encrypt_pin, generate_pin
+from app.services.credentials import (
+    compute_pin_hmac,
+    encrypt_pin,
+    generate_pin,
+    sweep_expired_credentials,
+)
 from app.services.events import record_server_event
 from app.services.sequence import allocate_next_change_seq
 
@@ -141,6 +147,9 @@ def approve_access_request(
     if target_end <= now:
         raise err_window_expired("Access request validity window has already passed.")
 
+    # Sweep expired credentials for this resource before checking Rule R1 (docs/credential-policy.md Section 4.1)
+    sweep_expired_credentials(db, resource_id=target.resource_id, now=now)
+
     # Rule R1 Check: At most one active credential per resource
     existing_active = (
         db.query(Credential)
@@ -161,11 +170,12 @@ def approve_access_request(
     try:
         # Replacement scenario: revoke existing active credential atomically
         if existing_active is not None and payload.replace_existing:
+            rev_seq = allocate_next_change_seq(db)
             existing_active.status = CredentialStatus.REVOKED.value
             existing_active.revoke_reason = RevokeReason.SUPERSEDED.value
             existing_active.revoked_at = now
             existing_active.revoked_by = admin.id
-            existing_active.change_seq = allocate_next_change_seq(db)
+            existing_active.change_seq = rev_seq
 
             # Update parent request of the superseded credential
             parent_req = db.get(AccessRequest, existing_active.request_id)
@@ -227,6 +237,13 @@ def approve_access_request(
         )
 
         db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise AppError(
+            code="internal_error",
+            message="Credential encryption failed due to key configuration error.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from exc
     except Exception:
         db.rollback()
         raise
@@ -311,18 +328,23 @@ def revoke_credential(
     if target is None:
         raise err_not_found(f"Credential #{id} not found.")
 
+    now = datetime.now(timezone.utc)
+    target_until = target.valid_until if target.valid_until.tzinfo else target.valid_until.replace(tzinfo=timezone.utc)
+    if target.status == CredentialStatus.ACTIVE.value and now >= target_until:
+        sweep_expired_credentials(db, resource_id=target.resource_id, now=now)
+        db.commit()
+
     if target.status != CredentialStatus.ACTIVE.value:
         raise err_invalid_state(
             f"Credential #{id} is already in terminal status '{target.status}'."
         )
-
-    now = datetime.now(timezone.utc)
     try:
+        rev_seq = allocate_next_change_seq(db)
         target.status = CredentialStatus.REVOKED.value
         target.revoke_reason = RevokeReason.ADMIN.value
         target.revoked_at = now
         target.revoked_by = admin.id
-        target.change_seq = allocate_next_change_seq(db)
+        target.change_seq = rev_seq
 
         # Update corresponding access request if present
         parent_req = db.get(AccessRequest, target.request_id)

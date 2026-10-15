@@ -225,10 +225,24 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     Prevents leakage of database credentials, tracebacks, or secrets.
     """
     logger.exception("Unhandled server exception: %s", exc)
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=format_error_payload(code="internal_error", message="An internal server error occurred."),
     )
+    origin = request.headers.get("origin")
+    if origin:
+        from app.config import get_settings
+        allowed = {
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+            *get_settings().cors_origins_list,
+        }
+        if origin in allowed:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 
 def register_error_handlers(app: FastAPI) -> None:
