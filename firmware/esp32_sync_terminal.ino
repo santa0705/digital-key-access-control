@@ -11,6 +11,8 @@
 
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <time.h>
+#include <sys/time.h>
 #include "mbedtls/md.h"
 #include "secrets.h"
 
@@ -63,10 +65,11 @@ const int MAX_CREDENTIALS = 16;
 CredentialRecord localCredentials[MAX_CREDENTIALS];
 int localCredentialCount = 0;
 
-// Synchronization state
+// Synchronization state & UTC Clock Anchor
 String currentEpoch = "";
 uint64_t lastAckedSeq = 0;
 String serverTimeAnchor = "";
+time_t anchorEpochSeconds = 0;
 unsigned long anchorMillis = 0;
 bool timeTrusted = false;
 
@@ -96,7 +99,59 @@ byte failedAttempts = 0;
 unsigned long lockoutUntilMillis = 0;
 
 // ============================================================================
-// 3. CRYPTOGRAPHIC UTILITIES (mbedtls HMAC-SHA256)
+// 3. STRICT UTC TIME PARSING & CLOCK ANCHORING
+// ============================================================================
+
+static const int DAYS_BEFORE_MONTH[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+
+time_t parseIsoUtcToEpoch(const char* iso) {
+  int y = 0, m = 0, d = 0, h = 0, min = 0, s = 0;
+  if (sscanf(iso, "%d-%d-%dT%d:%d:%d", &y, &m, &d, &h, &min, &s) != 6) {
+    return 0;
+  }
+  if (y < 1970 || m < 1 || m > 12 || d < 1 || d > 31) {
+    return 0;
+  }
+  int leapYears = 0;
+  for (int year = 1970; year < y; year++) {
+    if ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)) {
+      leapYears++;
+    }
+  }
+  time_t days = (time_t)(y - 1970) * 365 + leapYears;
+  days += DAYS_BEFORE_MONTH[m - 1];
+  if (m > 2 && ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0))) {
+    days += 1;
+  }
+  days += (d - 1);
+  return days * 86400ULL + h * 3600ULL + min * 60ULL + s;
+}
+
+// Forward declaration
+bool syncClockWithHealth();
+
+String getDeviceTimestampIso() {
+  if (!timeTrusted || anchorEpochSeconds == 0) {
+    // Attempt immediate clock synchronization from backend /health
+    syncClockWithHealth();
+  }
+
+  if (timeTrusted && anchorEpochSeconds > 0) {
+    time_t currentSeconds = anchorEpochSeconds + (time_t)((millis() - anchorMillis) / 1000);
+    struct tm ti;
+    if (gmtime_r(&currentSeconds, &ti) != NULL) {
+      char buf[25];
+      strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &ti);
+      return String(buf);
+    }
+  }
+
+  // Fallback only if server unreachable and offline
+  return "2026-10-15T12:00:00Z";
+}
+
+// ============================================================================
+// 4. CRYPTOGRAPHIC UTILITIES (mbedtls HMAC-SHA256)
 // ============================================================================
 
 bool computeHmacSha256(const uint8_t* key, size_t keyLen, const uint8_t* data, size_t dataLen, uint8_t* outDigest) {
@@ -138,7 +193,7 @@ String generateNonce() {
 }
 
 // ============================================================================
-// 4. HARDWARE ACTUATION & FEEDBACK
+// 5. HARDWARE ACTUATION & FEEDBACK
 // ============================================================================
 
 void servoPulse(int angleDegrees) {
@@ -172,7 +227,7 @@ void flashLed(int pin, int times, int durationMs) {
 }
 
 // ============================================================================
-// 5. KEYPAD DRIVER (Pure C++ debounced matrix scanner)
+// 6. KEYPAD DRIVER (Pure C++ debounced matrix scanner)
 // ============================================================================
 
 void setupKeypad() {
@@ -207,7 +262,7 @@ char scanKeypad() {
 }
 
 // ============================================================================
-// 6. EVENT QUEUE
+// 7. EVENT QUEUE
 // ============================================================================
 
 void queueTelemetryEvent(const char* eventType, const char* reason, char resCode, int credId, bool hasCred) {
@@ -236,7 +291,7 @@ void queueTelemetryEvent(const char* eventType, const char* reason, char resCode
 }
 
 // ============================================================================
-// 7. LOCAL VALIDATION LOGIC (Docs §6 Deterministic Order)
+// 8. LOCAL VALIDATION LOGIC (Docs §6 Deterministic Order)
 // ============================================================================
 
 void handlePinSubmission() {
@@ -348,20 +403,15 @@ void processKeyInput(char key) {
 }
 
 // ============================================================================
-// 8. BACKEND SYNC CLIENT (POST /device/v1/sync)
+// 9. BACKEND CLOCK SYNCHRONIZATION (/health) & SYNC CLIENT (/device/v1/sync)
 // ============================================================================
 
-String getDeviceTimestampIso() {
-  // If anchored with server time, offset by elapsed millis
-  if (serverTimeAnchor.length() >= 20) {
-    // In production, add elapsed millis to anchored UTC timestamp
-    return serverTimeAnchor;
+bool syncClockWithHealth() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[CLOCK] Cannot sync clock: Wi-Fi not connected.");
+    return false;
   }
-  return "2026-10-15T12:00:00Z";
-}
 
-void testHealthEndpoint() {
-  Serial.println("\n[PROBE] Testing GET /health ...");
   WiFiClient client;
   HTTPClient http;
   http.setConnectTimeout(5000);
@@ -369,17 +419,58 @@ void testHealthEndpoint() {
 
   String url = backendBaseUrl + "/health";
   if (!http.begin(client, url)) {
-    Serial.println("[PROBE] ERROR: http.begin failed");
-    return;
+    Serial.println("[CLOCK] ERROR: http.begin(/health) failed");
+    return false;
   }
+
   int httpCode = http.GET();
-  if (httpCode > 0) {
-    Serial.printf("[PROBE] HTTP Status: %d\n", httpCode);
-    Serial.printf("[PROBE] Response: %s\n", http.getString().c_str());
+  if (httpCode == 200) {
+    String responseBody = http.getString();
+    int keyIdx = responseBody.indexOf("\"server_time\"");
+    if (keyIdx >= 0) {
+      int colonIdx = responseBody.indexOf(':', keyIdx + 13);
+      if (colonIdx >= 0) {
+        int firstQuote = responseBody.indexOf('\"', colonIdx);
+        if (firstQuote >= 0) {
+          int secondQuote = responseBody.indexOf('\"', firstQuote + 1);
+          if (secondQuote > firstQuote) {
+            String serverTimeStr = responseBody.substring(firstQuote + 1, secondQuote);
+            time_t epoch = parseIsoUtcToEpoch(serverTimeStr.c_str());
+            if (epoch > 0) {
+              anchorEpochSeconds = epoch;
+              anchorMillis = millis();
+              timeTrusted = true;
+              serverTimeAnchor = serverTimeStr;
+
+              struct timeval tv;
+              tv.tv_sec = epoch;
+              tv.tv_usec = 0;
+              settimeofday(&tv, NULL);
+
+              Serial.printf("[CLOCK] Synchronized with /health UTC: %s (Epoch: %ld)\n",
+                            serverTimeStr.c_str(), (long)epoch);
+              http.end();
+              return true;
+            }
+          }
+        }
+      }
+    }
+    Serial.println("[CLOCK] Warning: server_time field not found in /health response.");
   } else {
-    Serial.printf("[PROBE] Failed: %s\n", http.errorToString(httpCode).c_str());
+    Serial.printf("[CLOCK] /health returned HTTP %d: %s\n", httpCode, http.errorToString(httpCode).c_str());
   }
   http.end();
+  return false;
+}
+
+void testHealthEndpoint() {
+  Serial.println("\n[PROBE] Running operational health check (/health) ...");
+  if (syncClockWithHealth()) {
+    Serial.println("[PROBE] Health probe OK and clock synchronized.");
+  } else {
+    Serial.println("[PROBE] Health probe check failed.");
+  }
 }
 
 void syncWithBackend() {
@@ -388,7 +479,18 @@ void syncWithBackend() {
     return;
   }
 
-  Serial.println("\n[SYNC] Starting POST /device/v1/sync ...");
+  // Before generating device sync request timestamp, synchronize clock from backend /health
+  Serial.println("\n[SYNC] Synchronizing clock from /health before generating sync request...");
+  bool synced = syncClockWithHealth();
+  if (!synced) {
+    if (!timeTrusted || anchorEpochSeconds == 0) {
+      Serial.println("[SYNC] ERROR: Clock sync from /health failed and no trusted anchor. Aborting sync.");
+      return;
+    }
+    Serial.println("[SYNC] WARNING: /health probe failed; falling back to local anchored elapsed clock.");
+  }
+
+  Serial.println("[SYNC] Starting POST /device/v1/sync ...");
   WiFiClient client;
   HTTPClient http;
   http.setConnectTimeout(5000);
@@ -441,6 +543,7 @@ void syncWithBackend() {
   }
   payload += "]}";
 
+  Serial.printf("[SYNC] Headers -> X-Device-Timestamp: %s\n", timestamp.c_str());
   Serial.printf("[SYNC] Sending payload (%u bytes, nonce: %s) ...\n", payload.length(), nonce.c_str());
   int httpCode = http.POST(payload);
 
@@ -481,14 +584,30 @@ void syncWithBackend() {
       Serial.printf("[SYNC] Epoch: %s\n", currentEpoch.c_str());
     }
 
-    // Extract server_time
-    int timeIdx = responseBody.indexOf("\"server_time\":\"");
+    // Extract server_time and re-anchor clock
+    int timeIdx = responseBody.indexOf("\"server_time\"");
     if (timeIdx >= 0) {
-      int endTime = responseBody.indexOf("\"", timeIdx + 15);
-      serverTimeAnchor = responseBody.substring(timeIdx + 15, endTime);
-      anchorMillis = millis();
-      timeTrusted = true;
-      Serial.printf("[SYNC] Server Time Anchor: %s (Time Trusted)\n", serverTimeAnchor.c_str());
+      int colonIdx = responseBody.indexOf(':', timeIdx + 13);
+      if (colonIdx >= 0) {
+        int firstQuote = responseBody.indexOf('\"', colonIdx);
+        if (firstQuote >= 0) {
+          int secondQuote = responseBody.indexOf('\"', firstQuote + 1);
+          if (secondQuote > firstQuote) {
+            serverTimeAnchor = responseBody.substring(firstQuote + 1, secondQuote);
+            time_t epoch = parseIsoUtcToEpoch(serverTimeAnchor.c_str());
+            if (epoch > 0) {
+              anchorEpochSeconds = epoch;
+              anchorMillis = millis();
+              timeTrusted = true;
+              struct timeval tv;
+              tv.tv_sec = epoch;
+              tv.tv_usec = 0;
+              settimeofday(&tv, NULL);
+              Serial.printf("[SYNC] Server Time Re-anchored: %s (Time Trusted)\n", serverTimeAnchor.c_str());
+            }
+          }
+        }
+      }
     }
 
     // Extract to_seq
@@ -506,7 +625,6 @@ void syncWithBackend() {
       int endCreds = responseBody.indexOf("]", credIdx);
       String credsJson = responseBody.substring(credIdx + 15, endCreds);
       
-      // Simple credential extractor for demo
       int p = 0;
       while ((p = credsJson.indexOf("\"id\":", p)) >= 0) {
         if (localCredentialCount >= MAX_CREDENTIALS) break;
@@ -526,7 +644,6 @@ void syncWithBackend() {
             statusStr = credsJson.substring(statusPos + 10, credsJson.indexOf("\"", statusPos + 10));
           }
 
-          // Check if already in store
           bool found = false;
           for (int c = 0; c < localCredentialCount; c++) {
             if (localCredentials[c].id == nextId) {
@@ -561,7 +678,7 @@ void syncWithBackend() {
 }
 
 // ============================================================================
-// 9. SELF-TEST TEST VECTORS (Policy §2.3)
+// 10. SELF-TEST TEST VECTORS (Policy §2.3)
 // ============================================================================
 
 void runSelfTestVectors() {
@@ -598,12 +715,16 @@ void runSelfTestVectors() {
 }
 
 // ============================================================================
-// 10. SETUP & MAIN LOOP
+// 11. SETUP & MAIN LOOP
 // ============================================================================
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
+  // Configure time environment to UTC
+  setenv("TZ", "UTC0", 1);
+  tzset();
 
   Serial.println("\n=======================================================");
   Serial.println("  Digital Key Access Control - ESP32 Access Terminal   ");
@@ -644,7 +765,7 @@ void setup() {
     delay(200);
     digitalWrite(GREEN_LED_PIN, LOW);
 
-    // Initial operational health check (preserving user's working probe)
+    // Initial operational health check & UTC clock synchronization
     testHealthEndpoint();
 
     // Initial synchronization with backend
@@ -658,7 +779,7 @@ void setup() {
 
   Serial.println("\n--- Interactive Terminal Ready ---");
   Serial.println("Keypad: Enter 6 digits + '#' to submit, '*' to clear, 'A' or 'B' to switch resource.");
-  Serial.println("Serial Commands: 'h'=Health probe | 's'=Sync | 'l'=Test servo | 'v'=Test vectors");
+  Serial.println("Serial Commands: 'h'=Health & Clock sync | 's'=Sync | 'l'=Test servo | 'v'=Test vectors");
   Serial.println("                 'a'/'b'=Select A/B | '0'-'9'=Digit | '*'=Clear | '#'=Enter");
 }
 
@@ -690,9 +811,10 @@ void loop() {
     } else if (ch == 'v' || ch == 'V') {
       runSelfTestVectors();
     } else if (ch == 'k' || ch == 'K') {
-      Serial.printf("[STATUS] Resource: %c | Buffer: '%s' | Creds in store: %d | Lockout: %s\n",
+      Serial.printf("[STATUS] Resource: %c | Buffer: '%s' | Creds in store: %d | Lockout: %s | Trusted Time: %s\n",
                     selectedResource, pinBuffer, localCredentialCount,
-                    (millis() < lockoutUntilMillis) ? "ACTIVE" : "NONE");
+                    (millis() < lockoutUntilMillis) ? "ACTIVE" : "NONE",
+                    getDeviceTimestampIso().c_str());
     } else if ((ch >= '0' && ch <= '9') || ch == '*' || ch == '#' || ch == 'A' || ch == 'B' || ch == 'a' || ch == 'b') {
       char upper = toupper(ch);
       Serial.printf("[SERIAL INPUT] Key: '%c'\n", upper);
