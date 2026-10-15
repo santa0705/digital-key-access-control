@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     APPROVED_MIGRATION_DB_NAMES: str = "digital_key"
     APPROVED_MIGRATION_USERS: str = ""
 
+    # Production migration authorization settings (strictly disabled by default)
+    ALLOW_PRODUCTION_MIGRATION: bool = False
+    APPROVED_PRODUCTION_HOSTS: str = (
+        "ep-sparkling-salad-b5pw9aqb-pooler.c-7.us-east-2.aws.neon.tech,"
+        "ep-sparkling-salad-b5pw9aqb.c-7.us-east-2.aws.neon.tech"
+    )
+    APPROVED_PRODUCTION_DB_NAMES: str = "neondb"
+
     # Authentication & cryptographic keys
     JWT_SECRET: str = "replace_with_generated_jwt_secret_hex_32_bytes"
     PIN_HMAC_KEY: str = "replace_with_generated_hmac_key_hex_32_bytes"

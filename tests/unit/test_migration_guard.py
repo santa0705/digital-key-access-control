@@ -41,9 +41,9 @@ def test_guard_rejects_empty_or_missing_url():
 
 
 def test_guard_rejects_remote_neon_target():
-    """Remote cloud URLs such as Neon are strictly rejected."""
+    """Remote cloud URLs such as Neon are strictly rejected by default even if allow_local_migration=True."""
     neon_url = "postgresql+psycopg://neondb_owner:secret_password@ep-cool-neon.tech/neondb"
-    with pytest.raises(MigrationTargetError, match="not in the approved migration hosts allowlist"):
+    with pytest.raises(MigrationTargetError, match="rejected: Production migrations are disabled"):
         validate_migration_target(
             url_to_check=neon_url,
             allow_local_migration=True,
@@ -177,3 +177,46 @@ def test_mask_database_url_never_exposes_password():
     assert "admin" in masked
     assert "127.0.0.1:5432" in masked
     assert "digital_key" in masked
+
+
+def test_guard_rejects_remote_target_when_only_local_opt_in_is_true():
+    """Setting ALLOW_LOCAL_MIGRATION=true CANNOT authorize remote/production migrations."""
+    neon_url = "postgresql+psycopg://neondb_owner:secret@ep-sparkling-salad-b5pw9aqb-pooler.c-7.us-east-2.aws.neon.tech/neondb"
+    with pytest.raises(MigrationTargetError, match="Production migrations are disabled by default"):
+        validate_migration_target(
+            url_to_check=neon_url,
+            allow_local_migration=True,
+            allow_production_migration=False,
+        )
+
+
+def test_guard_accepts_verified_neon_target_with_production_opt_in():
+    """Explicit ALLOW_PRODUCTION_MIGRATION=true with verified Neon host and neondb succeeds."""
+    neon_url = "postgresql+psycopg://neondb_owner:secret@ep-sparkling-salad-b5pw9aqb-pooler.c-7.us-east-2.aws.neon.tech/neondb"
+    result = validate_migration_target(
+        url_to_check=neon_url,
+        allow_production_migration=True,
+    )
+    assert result.database == "neondb"
+    assert "secret" not in result.masked_url
+    assert "***" in result.masked_url
+
+
+def test_guard_rejects_unapproved_remote_host_with_production_opt_in():
+    """Unapproved remote host is rejected even when ALLOW_PRODUCTION_MIGRATION=true."""
+    fake_cloud_url = "postgresql+psycopg://neondb_owner:secret@ep-malicious-unknown.c-7.us-east-2.aws.neon.tech/neondb"
+    with pytest.raises(MigrationTargetError, match="not in the approved production migration hosts allowlist"):
+        validate_migration_target(
+            url_to_check=fake_cloud_url,
+            allow_production_migration=True,
+        )
+
+
+def test_guard_rejects_unapproved_production_database_name():
+    """Unapproved production database name is rejected even when host matches."""
+    wrong_db_url = "postgresql+psycopg://neondb_owner:secret@ep-sparkling-salad-b5pw9aqb-pooler.c-7.us-east-2.aws.neon.tech/wrongdb"
+    with pytest.raises(MigrationTargetError, match="not in the approved production migration database allowlist"):
+        validate_migration_target(
+            url_to_check=wrong_db_url,
+            allow_production_migration=True,
+        )

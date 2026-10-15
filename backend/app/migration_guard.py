@@ -104,20 +104,27 @@ def validate_migration_target(
     approved_ports: Optional[str | Set[int]] = None,
     approved_db_names: Optional[str | Set[str]] = None,
     approved_users: Optional[str | Set[str]] = None,
+    allow_production_migration: Optional[bool | str] = None,
+    approved_production_hosts: Optional[str | Set[str]] = None,
+    approved_production_db_names: Optional[str | Set[str]] = None,
 ) -> TargetValidationResult:
     """
     Validate a database URL for Alembic migration execution.
-    Fails closed on any ambiguity, remote host, missing target, or unapproved property.
+    Fails closed on any ambiguity, remote host without explicit production opt-in,
+    missing target, or unapproved property.
 
     Args:
         url_to_check: Target database connection URL. If None, loaded from env / config.
-        allow_local_migration: Explicit opt-in flag.
-        approved_hosts: Set or comma-separated string of allowed hosts.
-        approved_ports: Set or comma-separated string of allowed ports.
-        approved_db_names: Set or comma-separated string of allowed database names.
+        allow_local_migration: Explicit opt-in flag for local migrations.
+        approved_hosts: Set or comma-separated string of allowed local hosts.
+        approved_ports: Set or comma-separated string of allowed local ports.
+        approved_db_names: Set or comma-separated string of allowed local database names.
         approved_users: Set or comma-separated string of allowed users.
+        allow_production_migration: Explicit opt-in flag for production migrations.
+        approved_production_hosts: Set or comma-separated string of allowed production hosts.
+        approved_production_db_names: Set or comma-separated string of allowed production database names.
     """
-    # 1. Resolve configuration values (favoring explicit arguments, then app.config, then os.getenv)
+    # 1. Resolve configuration values (favoring explicit arguments, then os.getenv, then app.config)
     if allow_local_migration is None:
         env_opt = os.getenv("ALLOW_LOCAL_MIGRATION")
         if env_opt is not None:
@@ -129,11 +136,16 @@ def validate_migration_target(
             except Exception:
                 allow_local_migration = False
 
-    if not is_truthy(allow_local_migration):
-        raise MigrationTargetError(
-            "Local database migrations are disabled by default. "
-            "Set ALLOW_LOCAL_MIGRATION=true to explicitly opt-in."
-        )
+    if allow_production_migration is None:
+        env_prod_opt = os.getenv("ALLOW_PRODUCTION_MIGRATION")
+        if env_prod_opt is not None:
+            allow_production_migration = env_prod_opt
+        else:
+            try:
+                from app.config import get_settings
+                allow_production_migration = get_settings().ALLOW_PRODUCTION_MIGRATION
+            except Exception:
+                allow_production_migration = False
 
     # 2. Check for missing URL
     if url_to_check is None:
@@ -180,7 +192,7 @@ def validate_migration_target(
             f"Migration target dialect '{driver}' is not an approved PostgreSQL dialect."
         )
 
-    # 5. Validate Host
+    # 5. Extract and normalize Host
     raw_host = parsed_url.host
     if not raw_host:
         raise MigrationTargetError(
@@ -192,93 +204,167 @@ def validate_migration_target(
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
 
-    if approved_hosts is None:
-        env_hosts = os.getenv("APPROVED_MIGRATION_HOSTS")
-        if env_hosts is not None:
-            hosts_set = parse_string_allowlist(env_hosts)
-        else:
-            try:
-                from app.config import get_settings
-                hosts_set = parse_string_allowlist(get_settings().APPROVED_MIGRATION_HOSTS)
-            except Exception:
-                hosts_set = {"localhost", "127.0.0.1", "::1"}
-    elif isinstance(approved_hosts, str):
-        hosts_set = parse_string_allowlist(approved_hosts)
-    else:
-        hosts_set = {h.lower() for h in approved_hosts}
-
-    if not hosts_set:
-        raise MigrationTargetError(
-            "Approved migration hosts allowlist is empty; failing closed."
-        )
-
-    if host not in hosts_set:
-        raise MigrationTargetError(
-            f"Host '{host}' is not in the approved migration hosts allowlist: {sorted(hosts_set)}"
-        )
-
-    # 6. Validate Port
-    port = parsed_url.port
-    if port is None:
-        # Default PostgreSQL port
-        port = 5432
-
-    if approved_ports is None:
-        env_ports = os.getenv("APPROVED_MIGRATION_PORTS")
-        if env_ports is not None:
-            ports_set = parse_port_allowlist(env_ports)
-        else:
-            try:
-                from app.config import get_settings
-                ports_set = parse_port_allowlist(get_settings().APPROVED_MIGRATION_PORTS)
-            except Exception:
-                ports_set = {5432}
-    elif isinstance(approved_ports, str):
-        ports_set = parse_port_allowlist(approved_ports)
-    else:
-        ports_set = set(approved_ports)
-
-    if not ports_set:
-        raise MigrationTargetError(
-            "Approved migration ports allowlist is empty; failing closed."
-        )
-
-    if port not in ports_set:
-        raise MigrationTargetError(
-            f"Port {port} is not in the approved migration ports allowlist: {sorted(ports_set)}"
-        )
-
-    # 7. Validate Database Name
+    # Database name
     db_name = (parsed_url.database or "").strip().lower()
     if not db_name:
         raise MigrationTargetError(
             f"Database URL specifies no database name: {masked}"
         )
 
-    if approved_db_names is None:
-        env_dbs = os.getenv("APPROVED_MIGRATION_DB_NAMES")
-        if env_dbs is not None:
-            db_set = parse_string_allowlist(env_dbs)
+    port = parsed_url.port
+    if port is None:
+        port = 5432
+
+    # Distinguish between local and remote/production targets
+    is_local_host = host in {"localhost", "127.0.0.1", "::1"}
+
+    if is_local_host:
+        # Local validation path
+        if not is_truthy(allow_local_migration):
+            raise MigrationTargetError(
+                "Local database migrations are disabled by default. "
+                "Set ALLOW_LOCAL_MIGRATION=true to explicitly opt-in."
+            )
+
+        if approved_hosts is None:
+            env_hosts = os.getenv("APPROVED_MIGRATION_HOSTS")
+            if env_hosts is not None:
+                hosts_set = parse_string_allowlist(env_hosts)
+            else:
+                try:
+                    from app.config import get_settings
+                    hosts_set = parse_string_allowlist(get_settings().APPROVED_MIGRATION_HOSTS)
+                except Exception:
+                    hosts_set = {"localhost", "127.0.0.1", "::1"}
+        elif isinstance(approved_hosts, str):
+            hosts_set = parse_string_allowlist(approved_hosts)
         else:
-            try:
-                from app.config import get_settings
-                db_set = parse_string_allowlist(get_settings().APPROVED_MIGRATION_DB_NAMES)
-            except Exception:
-                db_set = {"digital_key"}
-    elif isinstance(approved_db_names, str):
-        db_set = parse_string_allowlist(approved_db_names)
+            hosts_set = {h.lower() for h in approved_hosts}
+
+        if not hosts_set:
+            raise MigrationTargetError(
+                "Approved migration hosts allowlist is empty; failing closed."
+            )
+
+        if host not in hosts_set:
+            raise MigrationTargetError(
+                f"Host '{host}' is not in the approved migration hosts allowlist: {sorted(hosts_set)}"
+            )
+
+        # Port validation for local
+        if approved_ports is None:
+            env_ports = os.getenv("APPROVED_MIGRATION_PORTS")
+            if env_ports is not None:
+                ports_set = parse_port_allowlist(env_ports)
+            else:
+                try:
+                    from app.config import get_settings
+                    ports_set = parse_port_allowlist(get_settings().APPROVED_MIGRATION_PORTS)
+                except Exception:
+                    ports_set = {5432}
+        elif isinstance(approved_ports, str):
+            ports_set = parse_port_allowlist(approved_ports)
+        else:
+            ports_set = set(approved_ports)
+
+        if not ports_set:
+            raise MigrationTargetError(
+                "Approved migration ports allowlist is empty; failing closed."
+            )
+
+        if port not in ports_set:
+            raise MigrationTargetError(
+                f"Port {port} is not in the approved migration ports allowlist: {sorted(ports_set)}"
+            )
+
+        # Database name validation for local
+        if approved_db_names is None:
+            env_dbs = os.getenv("APPROVED_MIGRATION_DB_NAMES")
+            if env_dbs is not None:
+                db_set = parse_string_allowlist(env_dbs)
+            else:
+                try:
+                    from app.config import get_settings
+                    db_set = parse_string_allowlist(get_settings().APPROVED_MIGRATION_DB_NAMES)
+                except Exception:
+                    db_set = {"digital_key"}
+        elif isinstance(approved_db_names, str):
+            db_set = parse_string_allowlist(approved_db_names)
+        else:
+            db_set = {d.lower() for d in approved_db_names}
+
+        if not db_set:
+            raise MigrationTargetError(
+                "Approved migration databases allowlist is empty; failing closed."
+            )
+
+        if db_name not in db_set:
+            raise MigrationTargetError(
+                f"Database '{db_name}' is not in the approved migration database allowlist: {sorted(db_set)}"
+            )
+
     else:
-        db_set = {d.lower() for d in approved_db_names}
+        # Remote / Production validation path
+        if not is_truthy(allow_production_migration):
+            raise MigrationTargetError(
+                f"Remote migration target '{host}' rejected: Production migrations are disabled by default. "
+                "Set ALLOW_PRODUCTION_MIGRATION=true to explicitly opt-in."
+            )
 
-    if not db_set:
-        raise MigrationTargetError(
-            "Approved migration databases allowlist is empty; failing closed."
-        )
+        # Production host validation
+        if approved_production_hosts is None:
+            env_prod_hosts = os.getenv("APPROVED_PRODUCTION_HOSTS")
+            if env_prod_hosts is not None:
+                prod_hosts_set = parse_string_allowlist(env_prod_hosts)
+            else:
+                try:
+                    from app.config import get_settings
+                    prod_hosts_set = parse_string_allowlist(get_settings().APPROVED_PRODUCTION_HOSTS)
+                except Exception:
+                    prod_hosts_set = {
+                        "ep-sparkling-salad-b5pw9aqb-pooler.c-7.us-east-2.aws.neon.tech",
+                        "ep-sparkling-salad-b5pw9aqb.c-7.us-east-2.aws.neon.tech",
+                    }
+        elif isinstance(approved_production_hosts, str):
+            prod_hosts_set = parse_string_allowlist(approved_production_hosts)
+        else:
+            prod_hosts_set = {h.lower() for h in approved_production_hosts}
 
-    if db_name not in db_set:
-        raise MigrationTargetError(
-            f"Database '{db_name}' is not in the approved migration database allowlist: {sorted(db_set)}"
-        )
+        if not prod_hosts_set:
+            raise MigrationTargetError(
+                "Approved production migration hosts allowlist is empty; failing closed."
+            )
+
+        if host not in prod_hosts_set:
+            raise MigrationTargetError(
+                f"Host '{host}' is not in the approved production migration hosts allowlist: {sorted(prod_hosts_set)}"
+            )
+
+        # Production database name validation
+        if approved_production_db_names is None:
+            env_prod_dbs = os.getenv("APPROVED_PRODUCTION_DB_NAMES")
+            if env_prod_dbs is not None:
+                prod_db_set = parse_string_allowlist(env_prod_dbs)
+            else:
+                try:
+                    from app.config import get_settings
+                    prod_db_set = parse_string_allowlist(get_settings().APPROVED_PRODUCTION_DB_NAMES)
+                except Exception:
+                    prod_db_set = {"neondb"}
+        elif isinstance(approved_production_db_names, str):
+            prod_db_set = parse_string_allowlist(approved_production_db_names)
+        else:
+            prod_db_set = {d.lower() for d in approved_production_db_names}
+
+        if not prod_db_set:
+            raise MigrationTargetError(
+                "Approved production migration databases allowlist is empty; failing closed."
+            )
+
+        if db_name not in prod_db_set:
+            raise MigrationTargetError(
+                f"Database '{db_name}' is not in the approved production migration database allowlist: {sorted(prod_db_set)}"
+            )
 
     # 8. Validate User (if configured)
     user = parsed_url.username
