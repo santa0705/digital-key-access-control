@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  User,
   Shield,
   Clock,
   Key,
@@ -9,8 +8,6 @@ import {
   EyeOff,
   Send,
   RefreshCw,
-  AlertCircle,
-  CheckCircle2,
   Lock,
   Layers
 } from 'lucide-react';
@@ -28,7 +25,11 @@ export default function UserPortalStub() {
 
   // New Request Form State
   const [selectedResourceId, setSelectedResourceId] = useState('');
-  const [startAt, setStartAt] = useState('');
+  const [startAt, setStartAt] = useState(() => {
+    const now = new Date();
+    now.setMinutes(Math.ceil(now.getMinutes() / 5) * 5, 0, 0);
+    return now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  });
   const [durationHours, setDurationHours] = useState('1');
   const [purpose, setPurpose] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -36,14 +37,6 @@ export default function UserPortalStub() {
   // Transient PIN reveals (stored ONLY in memory, never in localStorage or console)
   const [revealedPins, setRevealedPins] = useState({});
   const [pinLoadingId, setPinLoadingId] = useState(null);
-
-  // Initialize start_at with current UTC rounded to next 5 minutes
-  useEffect(() => {
-    const now = new Date();
-    now.setMinutes(Math.ceil(now.getMinutes() / 5) * 5, 0, 0);
-    const isoUtc = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
-    setStartAt(isoUtc);
-  }, []);
 
   const loadPortalData = async () => {
     setLoading(true);
@@ -72,7 +65,36 @@ export default function UserPortalStub() {
   };
 
   useEffect(() => {
-    loadPortalData();
+    let ignore = false;
+    Promise.all([
+      adminApi.getResources().catch(() => []),
+      adminApi.getMyAccessRequests().catch(() => [])
+    ])
+      .then(([resList, reqList]) => {
+        if (!ignore) {
+          const validResources = Array.isArray(resList) ? resList : [];
+          setResources(validResources);
+          if (validResources.length > 0) {
+            setSelectedResourceId(prev => prev || String(validResources[0].id));
+          }
+          setMyRequests(Array.isArray(reqList) ? reqList : []);
+          setLoading(false);
+        }
+      })
+      .catch(err => {
+        if (!ignore) {
+          setToast({
+            type: 'error',
+            message: err.code === 'unauthorized'
+              ? 'Authentication required. Please sign in.'
+              : err.message || 'Failed to load user portal data'
+          });
+          setLoading(false);
+        }
+      });
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   // Submit Access Request

@@ -14,3 +14,11 @@ __pycache__/
 node_modules/
 dist/
 .local_pg/
+
+# IDE and OS artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

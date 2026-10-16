@@ -32,7 +32,30 @@ export default function AdminLogs() {
   };
 
   useEffect(() => {
-    loadLogs();
+    let ignore = false;
+    adminApi.getAdminLogs({ limit: 100, source: sourceFilter })
+      .then(data => {
+        if (!ignore) {
+          setLogs(Array.isArray(data) ? data : []);
+          setError(null);
+          setLoading(false);
+        }
+      })
+      .catch(err => {
+        if (!ignore) {
+          const msg = err.code === 'unauthorized'
+            ? 'Authentication required. Please sign in as an administrator.'
+            : err.code === 'network_error'
+            ? `Could not reach backend at ${adminApi.getBaseUrl()}. Please ensure the backend server is running.`
+            : err.message || 'Failed to load security audit logs.';
+          setError(msg);
+          setToast({ type: 'error', message: msg });
+          setLoading(false);
+        }
+      });
+    return () => {
+      ignore = true;
+    };
   }, [sourceFilter]);
 
   return (

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LogIn, Lock, Mail, AlertCircle, Shield, User } from 'lucide-react';
+import { LogIn, AlertCircle, Shield, User } from 'lucide-react';
 import Modal from './Modal';
 import Button from './Button';
 import { adminApi } from '../services/adminApi';
