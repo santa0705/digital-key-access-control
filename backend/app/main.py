@@ -43,7 +43,12 @@ async def lifespan(app: FastAPI):
     Validates cryptographic keys on server boot per docs/credential-policy.md §2.1.
     Specifically validates Fernet(PIN_ENC_KEY). Fails fast if PIN_ENC_KEY is missing,
     unconfigured, or set to placeholder.
+    Optionally executes automated migrations and seeding if AUTO_MIGRATE is enabled.
     """
+    import os
+    import logging
+    logger = logging.getLogger("app.startup")
+
     from app.services.credentials import get_fernet_cipher
     try:
         get_fernet_cipher()
@@ -54,6 +59,24 @@ async def lifespan(app: FastAPI):
             "environment variable (e.g. $env:PIN_ENC_KEY) or in .env. "
             "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
         ) from exc
+
+    if os.getenv("AUTO_MIGRATE", "").lower() in ("true", "1", "yes"):
+        logger.info("Executing automated database migration...")
+        from alembic import command
+        from alembic.config import Config
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+        cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+        command.upgrade(cfg, "head")
+        logger.info("Database migration completed.")
+
+        if os.getenv("AUTO_SEED", "").lower() in ("true", "1", "yes"):
+            logger.info("Executing automated demo database seeding...")
+            from app.db import SessionLocal
+            from app.seed import seed_database
+            with SessionLocal() as session:
+                counts = seed_database(session)
+            logger.info("Database seeded successfully: %s", counts)
+
     yield
 
 
@@ -68,15 +91,19 @@ app = FastAPI(
 # Register custom error handlers (standard envelope + validation_error)
 register_error_handlers(app)
 
-# CORS middleware configured from CORS_ORIGINS
+# CORS middleware configured from CORS_ORIGINS with local dev fallback
+configured_origins = set(settings.cors_origins_list)
+default_dev_origins = {
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+}
+effective_cors_origins = sorted(configured_origins | default_dev_origins)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-    ],
+    allow_origins=effective_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

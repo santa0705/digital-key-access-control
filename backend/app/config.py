@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve repository root where .env is stored
@@ -17,6 +18,18 @@ class Settings(BaseSettings):
     DATABASE_URL: str = (
         "postgresql+psycopg://digital_key_user:placeholder@localhost:5432/digital_key"
     )
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: str) -> str:
+        if isinstance(v, str):
+            v_stripped = v.strip()
+            if v_stripped.startswith("postgres://"):
+                return "postgresql+psycopg://" + v_stripped[len("postgres://"):]
+            if v_stripped.startswith("postgresql://") and not v_stripped.startswith("postgresql+"):
+                return "postgresql+psycopg://" + v_stripped[len("postgresql://"):]
+            return v_stripped
+        return v
 
     # Migration safety guard settings (fail-closed by default)
     ALLOW_LOCAL_MIGRATION: bool = False

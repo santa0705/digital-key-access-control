@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: digital-key-backend
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: digital-key-demo-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PIN_HMAC_KEY
+        generateValue: true
+      - key: PIN_ENC_KEY
+        value: JHYbs2_fejcg18NexOH7oQhmYLfamE1sWoDPoSgzN2o=
+      - key: DEVICE_API_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: "http://localhost:5173"
+      - key: AUTO_MIGRATE
+        value: "true"
+      - key: AUTO_SEED
+        value: "true"
+      - key: ALLOW_PRODUCTION_MIGRATION
+        value: "true"
+      - key: APPROVED_PRODUCTION_HOSTS
+        fromDatabase:
+          name: digital-key-demo-db
+          property: host
+      - key: APPROVED_PRODUCTION_DB_NAMES
+        fromDatabase:
+          name: digital-key-demo-db
+          property: database
+
+databases:
+  - name: digital-key-demo-db
+    plan: free
+    region: oregon
+    databaseName: digital_key_demo
+    user: demo_user

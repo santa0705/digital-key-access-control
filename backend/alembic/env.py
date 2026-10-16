@@ -49,6 +49,13 @@ if not effective_url:
     except Exception:
         effective_url = None
 
+if effective_url:
+    effective_url = effective_url.strip()
+    if effective_url.startswith("postgres://"):
+        effective_url = "postgresql+psycopg://" + effective_url[len("postgres://"):]
+    elif effective_url.startswith("postgresql://") and not effective_url.startswith("postgresql+"):
+        effective_url = "postgresql+psycopg://" + effective_url[len("postgresql://"):]
+
 # Fail-closed validation before any connection, engine creation, or DDL execution
 validate_migration_target(effective_url)
 
