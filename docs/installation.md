@@ -1,4 +1,4 @@
-﻿# Installation & Development Environment Setup Guide
+# Installation & Development Environment Setup Guide
 
 This guide provides end-to-end instructions for setting up the local development environment for the **Digital Key-Based Secure Access Control** system across all three tiers: FastAPI Backend, React Frontend, and ESP32 Firmware.
 
@@ -63,20 +63,20 @@ Open `.env` and fill in the required keys:
 
 ```ini
 # Database connection string (SQLAlchemy 2 + psycopg 3)
-DATABASE_URL=postgresql+psycopg://postgres:your_password@localhost:5432/digital_key
+DATABASE_URL=postgresql+psycopg://digital_key_user:your_db_password_here@localhost:5432/digital_key
 
 # Migration Safety Guard: set to true for local development databases
 ALLOW_LOCAL_MIGRATION=true
 APPROVED_MIGRATION_HOSTS=localhost,127.0.0.1,::1
 APPROVED_MIGRATION_PORTS=5432
 APPROVED_MIGRATION_DB_NAMES=digital_key
-APPROVED_MIGRATION_USERS=postgres
+APPROVED_MIGRATION_USERS=
 
-# Cryptographic Keys (generate fresh random secrets)
-JWT_SECRET=b6a8f7d9e2c41503847291a8c5e3d2b1f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5
-PIN_HMAC_KEY=1f2e3d4c5b6a708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809
-PIN_ENC_KEY=JHYbs2_fejcg18NexOH7oQhmYLfamE1sWoDPoSgzN2o=
-DEVICE_API_KEY=d9c8b7a6f5e4d3c2b1a0987654321fedcba9876543210fedcba9876543210fed
+# Cryptographic Keys (matching .env.example placeholders)
+JWT_SECRET=replace_with_generated_jwt_secret_hex_32_bytes
+PIN_HMAC_KEY=replace_with_generated_hmac_key_hex_32_bytes
+PIN_ENC_KEY=replace_with_generated_fernet_key_base64_32_bytes
+DEVICE_API_KEY=replace_with_generated_device_api_key
 
 # CORS allowed frontend origin
 CORS_ORIGINS=http://localhost:5173
@@ -164,7 +164,7 @@ npm run build
 
 ### 5.2 Install Required Libraries
 Open **Tools $\rightarrow$ Manage Libraries** (Ctrl+Shift+I) and install:
-- **`DIYables_LCD_I2C`** by DIYables (exact library required for 16Ã—2 character LCD over IÂ²C).
+- **`DIYables_LCD_I2C`** by DIYables (exact library required for 16×2 character LCD over I²C).
 
 *(Note: Matrix keypad scanning is implemented using pure GPIO register manipulation with internal pull-ups; no external keypad library is required).*
 
@@ -180,12 +180,12 @@ Open **Tools $\rightarrow$ Manage Libraries** (Ctrl+Shift+I) and install:
    #define SECRETS_H
 
    // Your local Wi-Fi Hotspot / Router credentials
-   #define WIFI_SSID "Your_WiFi_Network"
+   #define WIFI_SSID "Your_WiFi_SSID"
    #define WIFI_PASSWORD "Your_WiFi_Password"
 
    // Must match DEVICE_API_KEY and PIN_HMAC_KEY in your backend .env
-   #define DEVICE_API_KEY "d9c8b7a6f5e4d3c2b1a0987654321fedcba9876543210fedcba9876543210fed"
-   #define PIN_HMAC_KEY "1f2e3d4c5b6a708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809"
+   #define DEVICE_API_KEY "replace_with_device_api_key_from_env"
+   #define PIN_HMAC_KEY "replace_with_pin_hmac_key_from_env"
 
    #endif
    ```

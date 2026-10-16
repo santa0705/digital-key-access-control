@@ -1,4 +1,4 @@
-﻿# Digital Key Access Control â€” Management Console Frontend
+# Digital Key Access Control — Management Console Frontend
 
 A high-performance, responsive Single Page Application (SPA) built with **React 19** and **Vite** for administrators and users of the Digital Key Access Control system.
 
@@ -32,29 +32,29 @@ A high-performance, responsive Single Page Application (SPA) built with **React 
 
 ```
 frontend/
-â”œâ”€â”€ public/                 # Static assets (favicons, SVG icons)
-â”œâ”€â”€ src/
-â”‚   â”œâ”€â”€ assets/             # Brand graphics and images
-â”‚   â”œâ”€â”€ components/         # Reusable UI components (Modal, Button, Badge, Toast, Layout)
-â”‚   â”œâ”€â”€ pages/              # Primary route views:
-â”‚   â”‚   â”œâ”€â”€ AdminCredentials.jsx   # Credential revocation and active keys
-â”‚   â”‚   â”œâ”€â”€ AdminLogs.jsx          # Unified audit trail viewer
-â”‚   â”‚   â”œâ”€â”€ AdminPending.jsx       # Request approval / rejection workflow
-â”‚   â”‚   â”œâ”€â”€ UserPortalStub.jsx     # User access request and PIN reveal
-â”‚   â”‚   â””â”€â”€ NotFound.jsx           # 404 error page
-â”‚   â”œâ”€â”€ services/           # Backend API integration:
-â”‚   â”‚   â”œâ”€â”€ adminApi.js            # Admin domain endpoints
-â”‚   â”‚   â”œâ”€â”€ apiClient.js           # Fetch wrapper with Bearer token injection & error handling
-â”‚   â”‚   â””â”€â”€ mockData.js            # Initial demonstration stubs
-â”‚   â”œâ”€â”€ utils/              # Utilities (IST date formatting, credential status calculator)
-â”‚   â”œâ”€â”€ App.jsx             # Route definitions and session providers
-â”‚   â”œâ”€â”€ main.jsx            # React root mount
-â”‚   â””â”€â”€ index.css           # Global tokens and CSS design system
-â”œâ”€â”€ tests/                  # Automated integration and unit tests:
-â”‚   â”œâ”€â”€ apiClient.test.js   # Contract path, header, and error envelope tests
-â”‚   â””â”€â”€ dateUtils.test.js   # IST (+05:30) date formatting and lifecycle tests
-â”œâ”€â”€ vercel.json             # Vercel SPA routing rewrite rules
-â””â”€â”€ vite.config.js          # Vite build configuration
+├── public/                 # Static assets (favicons, SVG icons)
+├── src/
+│   ├── assets/             # Brand graphics and images
+│   ├── components/         # Reusable UI components (Modal, Button, Badge, Toast, Layout)
+│   ├── pages/              # Primary route views:
+│   │   ├── AdminCredentials.jsx   # Credential revocation and active keys
+│   │   ├── AdminLogs.jsx          # Unified audit trail viewer
+│   │   ├── AdminPending.jsx       # Request approval / rejection workflow
+│   │   ├── UserPortalStub.jsx     # User access request and PIN reveal
+│   │   └── NotFound.jsx           # 404 error page
+│   ├── services/           # Backend API integration:
+│   │   ├── adminApi.js            # Admin domain endpoints
+│   │   ├── apiClient.js           # Fetch wrapper with Bearer token injection & error handling
+│   │   └── mockData.js            # Initial demonstration stubs
+│   ├── utils/              # Utilities (IST date formatting, credential status calculator)
+│   ├── App.jsx             # Route definitions and session providers
+│   ├── main.jsx            # React root mount
+│   └── index.css           # Global tokens and CSS design system
+├── tests/                  # Automated integration and unit tests:
+│   ├── apiClient.test.js   # Contract path, header, and error envelope tests
+│   └── dateUtils.test.js   # IST (+05:30) date formatting and lifecycle tests
+├── vercel.json             # Vercel SPA routing rewrite rules
+└── vite.config.js          # Vite build configuration
 ```
 
 ---

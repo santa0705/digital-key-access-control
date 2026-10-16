@@ -1,12 +1,12 @@
-﻿# Digital Key Access Control â€” ESP32 Hardware Wiring & Hardware Notes
+# Digital Key Access Control — ESP32 Hardware Wiring & Hardware Notes
 
-Authoritative specifications: `docs/api-contract.md Â§5.4` and `docs/credential-policy.md Â§5 & Â§6`.
+Authoritative specifications: `docs/api-contract.md §5.4` and `docs/credential-policy.md §5 & §6`.
 
 ---
 
 ## 1. Verified Hardware Pinout & Physical Connections
 
-### 1.1 4Ã—4 Matrix Keypad (8 Pins Total)
+### 1.1 4×4 Matrix Keypad (8 Pins Total)
 The firmware scans the keypad rows using internal pull-ups (`INPUT_PULLUP`) and actively strobes columns low (`OUTPUT` LOW). No external pull-up resistors or third-party keypad libraries are required.
 
 | Matrix Pin | ESP32 GPIO | Electrical Mode | Safe Hardware Notes |
@@ -20,22 +20,22 @@ The firmware scans the keypad rows using internal pull-ups (`INPUT_PULLUP`) and 
 | **Col 3** | **GPIO 21** | `OUTPUT` (Strobe LOW) | Keypad Col 3 (`3, 6, 9, #`) |
 | **Col 4** | **GPIO 16** | `OUTPUT` (Strobe LOW) | Keypad Col 4 (`A, B, C, D`) |
 
-### 1.2 16Ã—2 IÂ²C Character LCD (PCF8574 Backpack)
+### 1.2 16×2 I²C Character LCD (PCF8574 Backpack)
 User feedback and system state are rendered in real time using the **DIYables LCD I2C** library.
 
 | LCD Pin | ESP32 Connection | Electrical Notes |
 |---|---|---|
 | **GND** | **Common GND** | Tied to ESP32 ground rail. |
 | **VCC** | **5V Power Rail** | Powered from external 5V regulated supply (or ESP32 5V/VIN pin when powered via USB). |
-| **SDA** | **GPIO 26** | IÂ²C Serial Data line initialized via `Wire.begin(26, 27)`. |
-| **SCL** | **GPIO 27** | IÂ²C Serial Clock line initialized via `Wire.begin(26, 27)`. |
+| **SDA** | **GPIO 26** | I²C Serial Data line initialized via `Wire.begin(26, 27)`. |
+| **SCL** | **GPIO 27** | I²C Serial Clock line initialized via `Wire.begin(26, 27)`. |
 
 - **Library:** `DIYables_LCD_I2C` (`#include <DIYables_LCD_I2C.h>`)
 - **Constructor:** `DIYables_LCD_I2C lcd(0x27, 16, 2);`
-- **IÂ²C Address:** `0x27` (standard PCF8574 address; contrast potentiometer adjusted on backpack).
+- **I²C Address:** `0x27` (standard PCF8574 address; contrast potentiometer adjusted on backpack).
 
 ### 1.3 SG90 Micro-Servo Actuator (Physical Locker Latch)
-The physical latch mechanism is driven by an SG90 servo using bit-banged 50 Hz PWM pulses (`500 Âµs` to `2500 Âµs`).
+The physical latch mechanism is driven by an SG90 servo using bit-banged 50 Hz PWM pulses (`500 µs` to `2500 µs`).
 
 | Servo Lead | Connection | Critical Electrical Rules |
 |---|---|---|
@@ -43,9 +43,9 @@ The physical latch mechanism is driven by an SG90 servo using bit-banged 50 Hz P
 | **Power (Red)** | **External 5V supply** | **CRITICAL:** Do NOT power servo directly from ESP32 3.3V rail. Voltage sag during motor stall causes ESP32 brownout reset. |
 | **Ground (Brown/Black)** | **Common Ground (GND)** | Must be tied together with ESP32 ground for common signal reference. |
 
-- **Locked Position:** `0Â°` (~500 Âµs pulse width)
-- **Unlocked Position:** `180Â°` (~2500 Âµs pulse width)
-- **Actuation Profile:** On access grant, servo sweeps to 180Â°, holds for 3.0 seconds (`delay(3000)`), and returns to 0Â° to relock.
+- **Locked Position:** `0°` (~500 µs pulse width)
+- **Unlocked Position:** `180°` (~2500 µs pulse width)
+- **Actuation Profile:** On access grant, servo sweeps to 180°, holds for 3.0 seconds (`delay(3000)`), and returns to 0° to relock.
 
 ### 1.4 Unused / Non-Implemented Peripherals
 The final confirmed physical implementation **does not use**:
@@ -57,7 +57,7 @@ The final confirmed physical implementation **does not use**:
 
 ## 2. Keypad Input State Machine & Functions
 
-- **Digits `0`â€“`9`:** Appends up to 6 numeric digits to the PIN buffer.
+- **Digits `0`–`9`:** Appends up to 6 numeric digits to the PIN buffer.
 - **Key `A`:** Selects **Resource A** (Physical locker latch controlled by servo).
 - **Key `B`:** Selects **Resource B** (Secondary / simulated shared resource).
 - **Key `*` (Clear):** Clears the entered PIN buffer immediately and resets the LCD prompt.
@@ -95,11 +95,11 @@ When tethered via USB cable, the firmware provides single-character debugging co
 |---|---|---|
 | **`h`** | Health Probe | Executes operational check (`GET /health`) and synchronizes clock. |
 | **`s`** | Trigger Sync | Triggers immediate sync (`POST /device/v1/sync`) with signed response verification. |
-| **`l`** | Latch Test | Manually actuates servo: sweeps to 180Â°, delays 2s, returns to 0Â°. |
+| **`l`** | Latch Test | Manually actuates servo: sweeps to 180°, delays 2s, returns to 0°. |
 | **`v`** | Self-Test Vectors | Verifies Cryptographic Test Vectors 1 (HMAC) & 2 (Signature). |
 | **`k`** | Status Dump | Displays resource selection, buffer length, credential count, lockout timer, and ISO timestamp. |
 | **`a` / `b`** | Resource Switch | Simulates keypad `A` or `B` selection. |
-| **`0`â€“`9`** | PIN Entry | Simulates entering a numeric digit. |
+| **`0`–`9`** | PIN Entry | Simulates entering a numeric digit. |
 | **`*`** | Clear Key | Simulates pressing the keypad `*` button. |
 | **`#`** | Enter Key | Simulates pressing `#` to submit PIN for verification. |
 
@@ -121,4 +121,4 @@ When tethered via USB cable, the firmware provides single-character debugging co
    - Confirm initial sync completes: `[SYNC] HTTP 200 OK` and `[SECURITY] X-Server-Signature VERIFIED`.
 6. **Physical Test:**
    - Enter active PIN on keypad followed by `#`.
-   - Confirm LCD displays `ACCESS GRANTED`, servo sweeps to 180Â°, holds 3 seconds, and returns to 0Â°.
+   - Confirm LCD displays `ACCESS GRANTED`, servo sweeps to 180°, holds 3 seconds, and returns to 0°.

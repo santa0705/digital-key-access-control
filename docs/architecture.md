@@ -1,4 +1,4 @@
-﻿# Digital Key Access Control â€” System Architecture Specification
+# Digital Key Access Control — System Architecture Specification
 
 This document details the high-level architecture, module breakdown, security boundaries, and communication flows of the **Digital Key-Based Secure Access Control** system.
 
@@ -21,7 +21,7 @@ graph TD
     subgraph Physical Hardware Node
         Terminal --- Keypad[4x4 Matrix Keypad]
         Terminal --- LCD[16x2 I2C Character LCD]
-        Terminal --- Servo[SG90 Latch Servo 180Â°]
+        Terminal --- Servo[SG90 Latch Servo 180°]
     end
 ```
 
@@ -39,9 +39,9 @@ graph TD
 ### 2.1 Physical Terminal Subsystem (ESP32 Firmware)
 - **Target Microcontroller:** ESP32-WROOM-32 (240 MHz dual-core Tensilica Xtensa LX6, 520 KB SRAM, 4 MB Flash).
 - **Physical Peripherals:**
-  - **4Ã—4 Matrix Keypad:** 8 GPIOs (4 row inputs with internal pull-ups `INPUT_PULLUP`, 4 column outputs strobed LOW).
-  - **16Ã—2 IÂ²C Character LCD:** Powered by PCF8574 backpack connected to GPIO 26 (SDA) and GPIO 27 (SCL) driven by `DIYables_LCD_I2C`.
-  - **SG90 Micro-Servo:** Actuates physical locker latch on GPIO 13 via 50 Hz PWM (`500 Âµs` = 0Â° locked, `2500 Âµs` = 180Â° unlocked).
+  - **4×4 Matrix Keypad:** 8 GPIOs (4 row inputs with internal pull-ups `INPUT_PULLUP`, 4 column outputs strobed LOW).
+  - **16×2 I²C Character LCD:** Powered by PCF8574 backpack connected to GPIO 26 (SDA) and GPIO 27 (SCL) driven by `DIYables_LCD_I2C`.
+  - **SG90 Micro-Servo:** Actuates physical locker latch on GPIO 13 via 50 Hz PWM (`500 µs` = 0° locked, `2500 µs` = 180° unlocked).
 - **Network & Cryptographic Engine:**
   - `WiFiClientSecure` with embedded Google Trust Services Root R4 certificate authority.
   - Hardware accelerated mbedTLS SHA-256 and HMAC routines.
@@ -90,10 +90,10 @@ sequenceDiagram
 
     alt Active Match Found & Current Time Valid
         Terminal->>LCD: "ACCESS GRANTED | Unlocking..."
-        Terminal->>Latch: Sweep to 180Â° (pulse 2500us)
+        Terminal->>Latch: Sweep to 180° (pulse 2500us)
         Terminal->>Terminal: Mark credential "consumed" & Queue telemetry event
         Note over Terminal,Latch: Hold unlocked for 3.0 seconds
-        Terminal->>Latch: Return to 0Â° (pulse 500us)
+        Terminal->>Latch: Return to 0° (pulse 500us)
         Terminal->>LCD: "Resource: A | Enter PIN: ______"
     else Invalid PIN or Expired
         Terminal->>LCD: "ACCESS DENIED | Invalid PIN"
