@@ -91,11 +91,15 @@ app = FastAPI(
 # Register custom error handlers (standard envelope + validation_error)
 register_error_handlers(app)
 
-# CORS middleware configured from CORS_ORIGINS with local dev fallback
+# CORS middleware configured from CORS_ORIGINS with local dev fallback and Vercel regex
 configured_origins = set(settings.cors_origins_list)
 default_dev_origins = {
+    "http://localhost:3000",
+    "http://localhost:4173",
     "http://localhost:5173",
     "http://localhost:5174",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:4173",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
 }
@@ -104,6 +108,7 @@ effective_cors_origins = sorted(configured_origins | default_dev_origins)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=effective_cors_origins,
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
