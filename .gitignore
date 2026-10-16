@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+secrets.h
+firmware/secrets.h
+!secrets.h.example
+!firmware/secrets.h.example
 .venv/
 venv/
 __pycache__/
@@ -9,3 +13,4 @@ __pycache__/
 .pytest_cache/
 node_modules/
 dist/
+.local_pg/
