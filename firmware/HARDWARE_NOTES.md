@@ -111,7 +111,7 @@ When tethered via USB cable, the firmware provides single-character debugging co
 2. **Power Requirements:** Connect external 5V power supply to SG90 servo VCC/GND with common ground tied to ESP32 GND.
 3. **Configure Secrets:** Copy `firmware/secrets.h.example` to `firmware/secrets.h` and provide your Wi-Fi SSID, Wi-Fi password, `DEVICE_API_KEY`, and `PIN_HMAC_KEY`.
 4. **Compile & Upload:**
-   - Arduino IDE $\rightarrow$ Select **ESP32 Dev Module**.
+   - Arduino IDE → Select **ESP32 Dev Module**.
    - Board Settings: Flash Frequency 80MHz, Upload Speed 921600, Partition Scheme Default 4MB with spiffs.
    - Install library: **DIYables_LCD_I2C** via Arduino Library Manager.
    - Open `firmware/esp32_sync_terminal.ino` and upload.

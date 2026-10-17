@@ -34,11 +34,11 @@ All behaviors defined here are binding across backend services (`services/creden
    ```
 3. **Resource Binding & Canonical Message Encoding:**
    The PIN is bound to a single uppercase resource code (`A` or `B`) prior to hashing:
-   $$\text{message} = \text{<resource\_code>} : \text{<pin>} \quad (\text{e.g., } \texttt{"A:482916"})$$
+   $$\text{message} = \text{\textless resource\\_code\textgreater} : \text{\textless pin\textgreater} \quad (\text{e.g., } \texttt{"A:482916"})$$
    - **Key bytes:** Raw UTF-8 bytes of `PIN_HMAC_KEY`.
    - **Message bytes:** Raw UTF-8 bytes of `message`.
    - **Digest output:** Exactly 64 lowercase hexadecimal characters.
-   $$\text{pin\_hmac} = \text{HMAC-SHA256}(\text{PIN\_HMAC\_KEY}, \text{message}).\text{hexdigest}()$$
+   $$\text{pin\\_hmac} = \text{HMAC-SHA256}(\text{PIN\\_HMAC\\_KEY}, \text{message}).\text{hexdigest}()$$
    *Consequence:* A PIN issued for Resource A produces a completely different digest than the same digits entered for Resource B.
 4. **Reversible Storage (Fernet):**
    ```python
@@ -122,10 +122,10 @@ At most **one** credential per resource may hold `status = 'active'` at any give
 
 ### 3.3 Change-Sequence Allocation on Every Transition
 Every credential insert or status modification must increment `change_seq` via `next_change_seq()`:
-- `active` inserted $\rightarrow$ new `change_seq`.
-- `active` $\rightarrow$ `consumed` $\rightarrow$ new `change_seq`.
-- `active` $\rightarrow$ `expired` (sweep) $\rightarrow$ new `change_seq`.
-- `active` $\rightarrow$ `revoked` (admin or replacement) $\rightarrow$ new `change_seq`.
+- `active` inserted → new `change_seq`.
+- `active` → `consumed` → new `change_seq`.
+- `active` → `expired` (sweep) → new `change_seq`.
+- `active` → `revoked` (admin or replacement) → new `change_seq`.
 *Result:* Terminal delta syncs (`last_seq`) will never miss an expiration or revocation.
 
 ---
@@ -160,7 +160,7 @@ $$\mathbf{Resource} \longrightarrow \mathbf{AccessRequest} \longrightarrow \math
 - `epoch`: UUID assigned on database initialization or reset. If a terminal sends an epoch that does not match server `epoch`, the server orders a full resync.
 
 ### 5.2 Device Rules (DR-1 through DR-8)
-- **DR-1 (NVS Dual-Slot Storage):** Terminal stores credentials in dual-slot NVS storage with CRC32 integrity check. Capacity: $\le 16$ credentials, $\le 32$ consumed markers, $\le 100$ queued events.
+- **DR-1 (NVS Dual-Slot Storage):** Terminal stores credentials in dual-slot NVS storage with CRC32 integrity check. Capacity: ≤ 16 credentials, ≤ 32 consumed markers, ≤ 100 queued events.
 - **DR-2 (Persisted Sequence):** Request carries persisted `last_seq`. It never advances using an uncommitted or RAM-only value.
 - **DR-3 (Response Signature & Freshness Validation):**
   The device verifies incoming response before processing:
@@ -221,13 +221,13 @@ The terminal persists the consumed marker to NVS *before* commanding the servo l
 |---|---|---|---|---|
 | **Tier 1** | Web / Backend | Server System Clock (UTC) | Authoritative server clock. | Active |
 | **Tier 2** | Mock Device | Injected test clock parameter | Deterministic test harness simulation. | Active |
-| **Tier 3** | Physical Online-First | Synced server timestamp (`server_time`) + internal millis elapsed | Valid while anchor age $\le$ `TIME_ANCHOR_MAX_AGE_S` (configurable; **MVP default: 90 seconds**). If expired, terminal marks time `untrusted` and rejects PIN entries fail-closed. | **Authoritative Baseline** |
+| **Tier 3** | Physical Online-First | Synced server timestamp (`server_time`) + internal millis elapsed | Valid while anchor age ≤ `TIME_ANCHOR_MAX_AGE_S` (configurable; **MVP default: 90 seconds**). If expired, terminal marks time `untrusted` and rejects PIN entries fail-closed. | **Authoritative Baseline** |
 | **Tier 4** | Optional Offline RTC | HW-111 (DS1307 + AT24C32N) | Battery-backed hardware clock. | **DISABLED FOR SPRINT** *(Hazard: 5V logic & charging circuit)* |
 
 ### 7.1 Tier 3 Trade-Off: Anchor Max Age (`TIME_ANCHOR_MAX_AGE_S = 90s`)
 - **Default Baseline:** 90 seconds (6 heartbeats at 15s interval).
 - **Security Implications:**
-  - **Fail-Closed Stale Time:** If the terminal loses Wi-Fi for $> 90\text{ s}$, all PIN attempts are rejected fail-closed with `time_untrusted` (rapid red LED blink; no servo actuation).
+  - **Fail-Closed Stale Time:** If the terminal loses Wi-Fi for > 90 s, all PIN attempts are rejected fail-closed with `time_untrusted` (rapid red LED blink; no servo actuation).
   - **Revocation Delay Window:** Revocation cannot be instantaneous while a terminal is disconnected. If an admin revokes a credential, a disconnected terminal will continue to honor the active PIN until its next successful sync or until the 90-second anchor expires.
 
 ---

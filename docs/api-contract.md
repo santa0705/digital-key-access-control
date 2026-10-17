@@ -89,7 +89,7 @@ All error responses across all routes (including FastAPI request validation erro
 | `401 Unauthorized` | `unauthorized` | Missing, malformed, or expired JWT bearer token. |
 | `401 Unauthorized` | `invalid_credentials` | Incorrect user email or password. |
 | `401 Unauthorized` | `invalid_device_key` | Missing or invalid `X-Device-Key` header on device routes. |
-| `401 Unauthorized` | `invalid_device_timestamp`| Device request timestamp deviates by $> 30\text{ s}$ from server UTC time. |
+| `401 Unauthorized` | `invalid_device_timestamp`| Device request timestamp deviates by > 30 s from server UTC time. |
 | `403 Forbidden` | `forbidden` | Authenticated user lacks permission (e.g. non-admin accessing `/admin/*`, or admin/other user accessing `/access-requests/{id}/pin`). |
 | `404 Not Found` | `not_found` | Requested entity ID does not exist. |
 | `404 Not Found` | `resource_not_found` | Resource ID in access request does not exist. |
@@ -98,7 +98,7 @@ All error responses across all routes (including FastAPI request validation erro
 | `409 Conflict` | `active_credential_exists` | Resource already has an active credential (Rule R1) and `replace_existing` was false or omitted. |
 | `409 Conflict` | `window_expired` | Access request validity window has already passed (`end_at <= now`). |
 | `409 Conflict` | `pin_unavailable` | Requested PIN is not active (request pending, rejected, consumed, expired, or revoked). |
-| `422 Unprocessable` | `validation_error` | Request payload fails schema validation, invalid date order (`end_at <= start_at`), duration $> 24\text{ h}$, start $> 1\text{ min}$ in past, or missing `Z` offset. |
+| `422 Unprocessable` | `validation_error` | Request payload fails schema validation, invalid date order (`end_at <= start_at`), duration > 24 h, start > 1 min in past, or missing `Z` offset. |
 | `503 Service Unavailable`| `sync_state_inconsistent`| Database `sync_state.current_seq` is less than `max(credentials.change_seq)`. |
 
 ### 3.4 Security Headers & Cache Controls
@@ -234,7 +234,7 @@ Used consistently across user and admin endpoints:
 Returns created `AccessRequest` object with `status: "pending"` and `credential: null`.
 
 **Validation Rules & Errors:**
-- `end_at > start_at`, duration $\le 24\text{ h}$.
+- `end_at > start_at`, duration ≤ 24 h.
 - `start_at` cannot be more than 1 minute in the past relative to server UTC.
 - Missing timezone `Z` returns `422 validation_error`.
 - Unknown `resource_id` returns `404 resource_not_found`.
@@ -438,14 +438,14 @@ Returns updated `AccessRequest` with `status: "rejected"`.
 - **Ownership:** Person B (server implementation), Person A (ESP32 client implementation)
 - **Request Headers:**
   - `X-Device-Key: <DEVICE_API_KEY>` (evaluated in constant time)
-  - `X-Device-Timestamp: <ISO-8601 UTC Z>` (server checks $| \text{timestamp} - \text{server\_time} | \le 30\text{ s}$; returns `401 invalid_device_timestamp` if skew exceeds 30s)
+  - `X-Device-Timestamp: <ISO-8601 UTC Z>` (server checks $| \text{timestamp} - \text{server\\_time} | \le 30\text{ s}$; returns `401 invalid_device_timestamp` if skew exceeds 30s)
 - **Response Headers:**
   - `X-Server-Signature: <64-character lowercase hex digest>`
 - **Response Authentication & Request Binding Protocol:**
   1. The device generates a random 16-character hex `request_nonce` for each sync request.
   2. The server echoes this exact `request_nonce` inside the JSON response payload.
   3. The server signs the raw UTF-8 bytes of the HTTP response body:
-     $$\text{X-Server-Signature} = \text{hex}(\text{HMAC-SHA256}(\text{DEVICE\_API\_KEY.encode('utf-8')}, \text{response\_body\_bytes}))$$
+     $$\text{X-Server-Signature} = \text{hex}(\text{HMAC-SHA256}(\text{DEVICE\\_API\\_KEY.encode('utf-8')}, \text{response\\_body\\_bytes}))$$
   4. The ESP32 buffers the response and verifies `X-Server-Signature` using mbedTLS.
   5. The ESP32 asserts that `response.request_nonce == request.request_nonce`.
   6. **Critical Failure Rule:** If `X-Server-Signature` fails or `request_nonce` does not match, the ESP32 must discard the entire response immediately:

@@ -155,15 +155,15 @@ npm run build
 
 ### 5.1 Configure Arduino IDE for ESP32
 1. Open **Arduino IDE** (version 2.x recommended).
-2. Go to **File $\rightarrow$ Preferences**.
+2. Go to **File → Preferences**.
 3. In **Additional boards manager URLs**, add:
    ```
    https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
    ```
-4. Open **Tools $\rightarrow$ Board $\rightarrow$ Boards Manager**, search for `esp32` by Espressif Systems, and click **Install** (version 2.0.14 or 3.x).
+4. Open **Tools → Board → Boards Manager**, search for `esp32` by Espressif Systems, and click **Install** (version 2.0.14 or 3.x).
 
 ### 5.2 Install Required Libraries
-Open **Tools $\rightarrow$ Manage Libraries** (Ctrl+Shift+I) and install:
+Open **Tools → Manage Libraries** (Ctrl+Shift+I) and install:
 - **`DIYables_LCD_I2C`** by DIYables (exact library required for 16×2 character LCD over I²C).
 
 *(Note: Matrix keypad scanning is implemented using pure GPIO register manipulation with internal pull-ups; no external keypad library is required).*

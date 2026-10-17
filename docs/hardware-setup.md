@@ -11,7 +11,7 @@ This document describes the complete physical assembly, electrical connections, 
 | **ESP32 Development Board** | ESP32-WROOM-32 / NodeMCU-32S (30 or 38 pins) | 1 | Terminal microcontroller, Wi-Fi HTTPS sync client, cryptographic engine, peripheral controller. |
 | **Matrix Keypad** | 4×4 Membrane or Tactile Keypad (16 keys: `0-9`, `*`, `#`, `A-D`) | 1 | User PIN entry, clear key (`*`), submission key (`#`), resource selector (`A`, `B`). |
 | **I²C Character LCD** | 16×2 LCD with soldered PCF8574 I²C backpack | 1 | Live system status, prompt display, countdown timers, access feedback messages. |
-| **Micro-Servo Motor** | SG90 9g TowerPro (analog PWM servo) | 1 | Mechanical physical lock actuation (0° locked $\leftrightarrow$ 180° unlocked). |
+| **Micro-Servo Motor** | SG90 9g TowerPro (analog PWM servo) | 1 | Mechanical physical lock actuation (0° locked ↔ 180° unlocked). |
 | **External Power Supply** | 5V DC Regulated Power Supply (≥ 1.5A) or dual-rail breadboard power supply | 1 | Dedicated clean power rail for the servo motor and LCD backlight to isolate motor inductive spikes. |
 | **Breadboard & Wires** | Full-size solderless breadboard + male-to-male and male-to-female jumper wires | 1 set | Prototyping interconnections and shared ground bus. |
 
